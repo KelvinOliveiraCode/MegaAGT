@@ -1,0 +1,17 @@
+{
+  "name": "opencode-hub",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Hub desktop para OpenCode CLI — sessões em paralelo, subagentes, thinking e temas",
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "scripts": {
+    "vendor": "node vendor.mjs",
+    "dev": "npx tauri dev",
+    "build": "npx tauri build"
+  }
+}
