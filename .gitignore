@@ -1,0 +1,41 @@
+# dependencias
+node_modules/
+
+# build do rust / tauri
+# target/ tem centenas de MB; gen/schemas/ e regenerado pelo tauri-build
+src-tauri/target/
+src-tauri/gen/
+
+# icones de plataformas que este app nao usa (Windows-only, 38 arquivos).
+# A fonte e app-icon.svg; `npx tauri icon app-icon.svg` recria os tres.
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
+# sistema operacional
+Thumbs.db
+desktop.ini
+.DS_Store
+ehthumbs.db
+
+# editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# logs
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+#############################################################
+# NOTA: dist/ NAO e ignorado de proposito.
+#
+# Nao existe build step no frontend. app.js, styles.css e index.html
+# sao escritos a mao e dist/tauri-api/ e o @tauri-apps/api vendorizado
+# em dist/. Ignorar dist/ faria o `npm run build` falhar num clone novo
+# sem nenhum aviso.
+#
+# Depois de atualizar @tauri-apps/api no package.json, rode:
+#     npm run vendor
+#############################################################

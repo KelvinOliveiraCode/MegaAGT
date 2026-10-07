@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2138"/>
+      <stop offset="1" stop-color="#0b0e18"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0.25" y1="0" x2="0.75" y2="1">
+      <stop offset="0" stop-color="#7fd4ff"/>
+      <stop offset="0.55" stop-color="#4aa8f0"/>
+      <stop offset="1" stop-color="#6b7cff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- fundo arredondado -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#bg)"/>
+  <rect x="32.5" y="32.5" width="959" height="959" rx="216" fill="none" stroke="#3d4a72" stroke-width="3"/>
+
+  <!-- raio: mesmo caminho usado na interface, nao espelhado -->
+  <g transform="translate(128 128) scale(32)">
+    <path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z" fill="url(#bolt)"/>
+  </g>
+</svg>

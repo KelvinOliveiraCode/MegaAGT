@@ -1,0 +1,11 @@
+# Normaliza fim de linha no repositorio. O Windows	write2 converte para CRLF
+# ao checar, mas guarda LF no repositorio — sem isso todo arquivo aparece
+# como modificado em um so commit.
+* text=auto eol=lf
+
+# binarios
+*.png binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
