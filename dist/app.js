@@ -1873,7 +1873,11 @@ function buildBody(sid, m, live, streaming = false) {
   if (type === "user") {
     body.appendChild(el("div", { class: "msg-text", text: normalizeText(m.text || "") }));
     if (m.files?.length) {
-      body.appendChild(el("div", { class: "dim", style: "font-size:11px;margin-top:4px", text: `${m.files.length} anexo(s)` }));
+      // nome e tamanho, nao so a contagem: o usuario precisa saber o que mandou
+      const lista = m.files
+        .map((f) => `${f.name}${f.folder ? " (pasta)" : f.size ? " (" + fmtBytes(f.size) + ")" : ""}`)
+        .join(", ");
+      body.appendChild(el("div", { class: "anexos-msg", title: lista, text: lista }));
     }
     body.appendChild(messageActions(sid, m));
     return body;

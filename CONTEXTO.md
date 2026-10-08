@@ -446,6 +446,12 @@ Adicione o botão em `index.html`, um caso em `renderView`, e guarde o nome em
   `{type:"over"}` e vendo quem poe `body.soltando`. O ouvinte de eventos do
   servidor estoura `JSON.parse` com esse payload, entao quem lancar
   SyntaxError nao e' o handler de arraste.
+- **`GET /api/session?search=` casa por CONTEUDO, nao por titulo.** Apagar em
+  loop por `search=ZZ`filtrou uma sessao real do usuario (`nac3-pizza-rj-4`)
+  cujo corpo continha a string, e `DELETE /api/session/{id}` nao tem volta.
+  Para limpar sessao de teste: **liste sem `search`**, filtre em memoria por
+  `title` com prefixo conhecido, e confirme o id antes de apagar. A lista e
+  paginada (`limit` ate 200), entao o total real e' maior que uma pagina.
 - Reordenar cartao do Paralelo gravava a ordem **a cada `pointermove`**. Cada
   quadro recalcula a posicao a partir da ordem ja trocada, entao o cartao faz
   ping-pong e volta ao lugar quando o numero de quadros e' par. A ordem e' um

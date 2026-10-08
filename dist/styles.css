@@ -1080,3 +1080,11 @@ body.soltando::after {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 32%, transparent);
 }
 .p-card.alvo-solta .p-body { opacity: .55; }
+
+/* legenda dos anexos na mensagem enviada */
+.anexos-msg {
+  margin-top: 5px; font-size: var(--t-xs); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  padding-left: 7px;
+}
