@@ -71,6 +71,15 @@ do modelo — é assim que o OpenCode modela raciocínio.
   o Explorer na pasta exata (`C:\Users\...\project`, com espaços ou não).
 - Barras de rolagem finas em toda a interface, com trilho invisível.
 
+### Persistentes enquanto você digita
+- O **rascunho do compositor não se perde**: nem em evento do stream, nem ao
+  trocar de modelo, sessão, configuração ou view. Ele fica em `localStorage`
+  e volta com o cursor onde parou e o foco de volta no campo.
+- O mesmo vale para os campos das cartas do Paralelo, cada um com o seu
+  rascunho.
+- **Arrastar** um arquivo para a janela *anexa* o arquivo. Ele **não** escreve
+  o caminho no texto — escrevia os dois e o arquivo aparecia em dobro.
+
 ### Ajustes
 
 Em **aparencia** alem do tema, do destaque e do tamanho do texto, ha

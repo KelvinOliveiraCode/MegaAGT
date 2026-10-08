@@ -126,6 +126,14 @@ const state = {
   expandedKids: new Set(),
   subagentsAll: false,
   diffs: {},
+  // rascunho do compositor. O composer e' reconstruido a cada render (SSE,
+  // troca de modelo, config), e sem isso o texto que estava sendo digitado
+  // sumia no meio da frase.
+  draft: {
+    foco: store.get("draft.foco", ""),
+    cards: store.get("draft.cards", {}),
+    cursor: 0,
+  },
 
   events: [],
   eventFilter: "",
@@ -311,24 +319,40 @@ function matchesModel(m, q) {
   return searchKey(m.name).includes(q) || searchKey(m.providerID).includes(q) || searchKey(m.modelID).includes(q);
 }
 
-function modelKey(m) {
-  if (!m) return "";
-  const id = m.modelID || String(m.id || "").split("/").pop();
-  const base = `${m.providerID || ""}/${id}`;
-  return m.variant ? `${base}#${m.variant}` : base;
-}
 /**
- * Chave sem a variante. `modelKey` inclui o `#variante` quando existe, e o
- * catalogo de /api/model nunca traz variante — comparar as duas coisas
- * direto nunca casaria.
+ * Chave canonica de um modelo, sem a variante.
+ *
+ * O id as vezes carrega um namespace ("inclusionai/ling-3.1-flash") e as vezes
+ * vem so' o nome ("ling-3.1-flash"). Retirar o pedaco (o .split("/").pop() que
+ * existia aqui) fazia a sessao e o catalogo nunca casarem — o seletor de
+ * modelo e o de effort ofereciam apenas a variante atual. Regra: tira o
+ * prefixo do provedor quando ele estiver la', e mantem o resto intacto.
  */
 function modelBaseKey(m) {
-  return modelKey(m).split("#")[0];
+  if (!m) return "";
+  const provedor = m.providerID || "";
+  let id = String(m.modelID ?? m.id ?? "");
+  if (provedor && id.startsWith(provedor + "/")) id = id.slice(provedor.length + 1);
+  return provedor ? provedor + "/" + id : id;
 }
+
+/** Chave com a variante, quando existir. */
+function modelKey(m) {
+  const base = modelBaseKey(m);
+  return m?.variant ? base + "#" + m.variant : base;
+}
+
 /** Variantes de um modelo, tolerando entrada como string ou objeto. */
 function modelVariants(m) {
   const lista = m?.variants || [];
   return [...new Set(lista.map((v) => (typeof v === "string" ? v : v?.id)).filter(Boolean))];
+}
+
+/** O modelo correspondente no catalogo de /api/model, se existir. */
+function modeloNoCatalogo(m) {
+  const chave = modelBaseKey(m);
+  if (!chave) return null;
+  return state.models.find((x) => modelBaseKey(x) === chave) || null;
 }
 function modelName(m) {
   if (!m) return "";
@@ -337,6 +361,7 @@ function modelName(m) {
 }
 function agentLabel(a) {
   if (!a) return "";
+  if (typeof a === "string") return a;
   return a.name || a.id || "";
 }
 
@@ -710,6 +735,43 @@ function chronological(list) {
   });
 }
 
+const tamanhoConteudo = (m) =>
+  Array.isArray(m?.content) ? m.content.length : (m?.content?.length || 0);
+
+/**
+ * Une o que o servidor mandou com o que ja' estava na tela.
+ *
+ * `/api/session/{id}/message` as vezes responde com menos do que deveria:
+ * uma pagina da frente, ou a resposta chegando antes de persistir. Substituir
+ * a lista pela resposta apagava mensagens na frente do usuario — inclusive a
+ * resposta que ele estava esperando ler, nos dois modos. Regra: a resposta do
+ * servidor nunca pode diminuir a lista.
+ */
+function mergeServer(anteriores, novos) {
+  const atual = anteriores || [];
+  if (!novos.length) {
+    if (atual.length) console.warn("list_messages voltou vazio; mantendo as " + atual.length + " mensagens em tela");
+    return atual;
+  }
+  const idx = new Map(atual.map((m, i) => [String(m.id), i]));
+  const out = atual.slice();
+  let ganhou = false;
+  for (const m of novos) {
+    const id = String(m.id || "");
+    if (!id || id.startsWith("local-")) continue;
+    const onde = idx.get(id);
+    if (onde === undefined) {
+      idx.set(id, out.length);
+      out.push(m);
+      ganhou = true;
+    } else if (tamanhoConteudo(m) >= tamanhoConteudo(out[onde])) {
+      // o servidor tem a versao completa, mas so troca quando nao for menor
+      out[onde] = m;
+    }
+  }
+  return ganhou ? chronological(out) : out;
+}
+
 async function refreshMessages(sid, { force = false } = {}) {
   if (!sid) return [];
   if (!force && state.messages[sid]) return state.messages[sid];
@@ -718,13 +780,38 @@ async function refreshMessages(sid, { force = false } = {}) {
     // descarta o eco otimista: a mensagem real ja veio do servidor e mostra-la
     // junto com o eco duplica a mensagem do usuário
     const doServidor = (r?.data || []).filter((m) => !String(m.id || "").startsWith("local-"));
-    state.messages[sid] = mergePending(sid, chronological(doServidor));
+    const unido = mergeServer(state.messages[sid] || [], chronological(doServidor));
+    state.messages[sid] = mergePending(sid, unido);
+    // explicito: o merge e' por uniao, entao a lista nunca encolhe aqui
+    if (r?.truncated) console.warn("list_messages truncado para " + sid);
     return state.messages[sid];
   } catch (e) {
     console.error(e);
     state.messages[sid] = state.messages[sid] || [];
     return state.messages[sid];
   }
+}
+
+/**
+ * /api/agent devolve [] de intermitente: na primeira chamada depois de subir o
+ * servico volta vazio, e na seguinte voltam os 277. Aceitar o vazio deixaria o
+ * seletor de modo sem nenhuma opcao — que e' exatamente o defeito de "sumiu o
+ * build/plan". Por isso quem nao pode estar vazio insiste.
+ */
+async function insistirLista(cmd, pick, tentativas = 5) {
+  let ultimo = [];
+  for (let i = 0; i < tentativas; i++) {
+    try {
+      const v = pick(await api(cmd));
+      if (v && v.length) return v;
+      ultimo = v || [];
+    } catch (e) {
+      console.warn(cmd + " falhou: " + (e?.message || e));
+    }
+    if (i < tentativas - 1) await new Promise((x) => setTimeout(x, 700));
+  }
+  if (!ultimo.length) console.warn(cmd + ": devolveu vazio em " + tentativas + " tentativas");
+  return ultimo;
 }
 
 async function refreshMeta() {
@@ -743,7 +830,8 @@ async function refreshMeta() {
   };
   const [models, agents, commands] = await Promise.all([
     settle("list_models", (r) => r?.data || []),
-    settle("list_agents", (r) => r?.data || []),
+    // a lista de agentes volta vazia as vezes; tenta de novo antes de aceptar
+    insistirLista("list_agents", (r) => r?.data || []),
     settle("list_commands", (r) => r?.data || []),
   ]);
   state.models = models;
@@ -805,8 +893,15 @@ function scheduleRefetch(sid) {
     }
     delete refetchTries[sid];
     clearLive(sid);
+    // todas as sessoes visiveis, nao so a selecionada. No Paralelo as outras
+    // ficavam com o historico velho e a resposta chegada "nao aparecia": o
+    // cache existia, entao refreshMessages sem force nem ia ao servidor.
+    const alvos =
+      state.view === "paralelo"
+        ? parOrder(state.pins.filter((id) => sessionById(id)))
+        : [state.selectedId].filter(Boolean);
+    for (const alvo of alvos) await refreshMessages(alvo, { force: true });
     if (sid === state.selectedId) {
-      await refreshMessages(sid, { force: true });
       renderMessages();
       renderSessionHeader();
       refreshPermissions(sid);
@@ -917,17 +1012,17 @@ function inserirNoCampo(campo, texto) {
 }
 
 /**
- * Solta de verdade: escreve o caminho de cada item no campo, na posicao do
- * mouse, e anexa o item para o modelo ler o conteudo. Os dois sao necessarios:
- * o texto dalocaliza, o anexo entrega.
+ * Solta de verdade: anexa o item para o modelo ler o conteudo.
+ *
+ * Antes tambem escrevia o caminho no campo, e o arquivo aparecia duas vezes —
+ * como texto e como anexo. O anexo e' o que entrega o arquivo; escrever o
+ * caminho e' o que faz o texto do prompt ficar cheio de ruido. Arrastar so'
+ * anexa; quem quiser citar o caminho digita.
  */
 async function soltarCaminhos(caminhos, pos) {
   if (!caminhos?.length) return;
   const d = destinoDaSolta(pos);
   if (!d) return;
-  // sem campo visivel (por exemplo, so existe o Paralelo na tela) o caminho
-  // fica guardado para quando o Foco aparecer; o anexo vai sempre
-  if (d.campo) inserirNoCampo(d.campo, caminhos.join(", "));
   try {
     const r = await api("describe_paths", { paths: caminhos });
     addAnexos(d.alvo, r?.paths || []);
@@ -1459,6 +1554,13 @@ function renderView() {
 
 function focusShell() {
   const root = $("#viewRoot");
+  // O DOM do composer vai ser destruido. Guarda o texto, se tinha o foco e
+  // onde estava o cursor, para devolver tudo depois.
+  const taAntes = $(".composer textarea");
+  if (taAntes) state.draft.foco = taAntes.value;
+  const tinhaFoco = taAntes === document.activeElement;
+  const cursor = taAntes ? (taAntes.selectionEnd ?? taAntes.value.length) : 0;
+  state.draft.cursor = cursor;
   root.textContent = "";
   const s = sessionById(state.selectedId);
 
@@ -1470,8 +1572,18 @@ function focusShell() {
   chat.appendChild(scroll);
   const perms = el("div", { id: "permBar" });
   perms.className = "hidden";
-  const composer = buildComposer(s);
+  const composer = buildComposer(s, { foco: tinhaFoco, cursor });
   root.append(head, perms, chat, composer);
+  if (tinhaFoco) {
+    // espera o proximo quadro: focar antes de criar o elemento nao faz nada
+    requestAnimationFrame(() => {
+      const ta = $(".composer textarea", root);
+      if (!ta) return;
+      ta.focus({ preventScroll: true });
+      const fim = Math.min(cursor, ta.value.length);
+      ta.setSelectionRange(fim, fim);
+    });
+  }
   renderMessages();
 }
 
@@ -1830,9 +1942,9 @@ function renderInbox(sid) {
 
 /* ---------- agentes ---------- */
 /**
- * Primarias (Build, Plan, jev...) primeiro, subagentes depois, alfabetico
- * dentro do grupo. A API traz `mode: "primary" | "subagent"`; sem ordenar,
- * os 271 subagentes empurravam as primarias para o fim da lista.
+ * Primarias (Build, Plan...) primeiro, subagentes depois, alfabetico dentro
+ * do grupo. A API traz `mode: "primary" | "subagent"`; sem ordenar, os
+ * centenas de subagentes empurravam as primarias para o fim da lista.
  */
 function orderAgents(lista) {
   return [...lista].sort((a, b) => {
@@ -2916,12 +3028,24 @@ function garantirCamera(scroll, chave) {
 /* ============================================================
    Compositor
    ============================================================ */
-function buildComposer(s) {
+function buildComposer(s, rest) {
+  // `rest` carrega foco e posicao do cursor do campo que foi destruido.
+  const foco = rest?.foco ?? false;
+  const cursor = rest?.cursor ?? 0;
   const wrap = el("div", { class: "composer" });
   const inner = el("div", { class: "composer-inner" });
-  mountAnexos(wrap, null); // os anexos ja pendientes entram no composer recem-nascido
+  mountAnexos(wrap, null); // os anexos ja pendentes entram no composer recem-nascido
   const box = el("div", { class: "composer-box" });
   const ta = el("textarea", { rows: "1", placeholder: "Mensagem para a sessão...", spellcheck: "false" });
+  // o rascunho volta: sem isso qualquer render (evento do SSE, troca de
+  // modelo ou de configuracao) destruia o campo com texto no meio
+  ta.value = state.draft.foco || "";
+  const gravar = () => {
+    state.draft.foco = ta.value;
+    store.set("draft.foco", state.draft.foco);
+  };
+  ta.addEventListener("input", gravar);
+  ta.addEventListener("change", gravar);
   const send = el("button", { class: "send-btn", title: "Enviar (Enter)" });
   send.appendChild(icon("i-send"));
   // botao de entrega: agora (corta a vez do modelo) ou na fila (espera)
@@ -3000,6 +3124,8 @@ function buildComposer(s) {
     if (!text) return;
     closeAc();
     ta.value = "";
+    state.draft.foco = "";
+    store.set("draft.foco", "");
     ta.style.height = "auto";
     const cmdMatch = /^\/([A-Za-z0-9_-]+)\s*([\s\S]*)$/.exec(text);
     const known = cmdMatch && state.commands.some((c) => c.name === cmdMatch[1]);
@@ -3231,6 +3357,16 @@ function renderParalelo() {
   // nao recria os cartoes no meio de um arraste: o elemento sob o cursor
   // sumiria e o tamanho/posicao perdidos
   if (parAjustando) return;
+  // guarda o rascunho e o foco de cada campo antes de recriar os cartoes
+  const focoAntes = new Map();
+  for (const inp of $$(".p-foot input")) {
+    const card = inp.closest(".p-card");
+    if (card?.dataset.sid) {
+      state.draft.cards[card.dataset.sid] = inp.value;
+      if (inp === document.activeElement) focoAntes.set(card.dataset.sid, inp.selectionEnd ?? inp.value.length);
+    }
+  }
+  store.set("draft.cards", state.draft.cards);
   root.textContent = "";
   const pins = parOrder(state.pins.filter((id) => sessionById(id)));
   if (!pins.length) {
@@ -3273,11 +3409,38 @@ function renderParalelo() {
       openModelPicker(modelBtn, s);
     };
 
+    // effort/thinking: no Foco fica no menu da sessao; aqui o cartao tinha so'
+    // modelo e modo, e trocar o effort obrigava sair do Paralelo.
+    // So' aparece quando o modelo realmente tem variantes.
+    // o catalogo pode carregar depois que o cartao nasceu, entao o botao
+    // aparece sempre: picker e' quem diz quando o modelo nao tem variante.
+    const effBtn = el("button", { class: "p-effort", type: "button", title: "Effort de raciocínio" },
+      el("span", { class: "nowrap", text: s.model?.variant || "effort" }));
+    effBtn.onclick = (e) => {
+      e.stopPropagation();
+      openEffortPicker(effBtn, s);
+    };
+
+    // modo (build/plan): no Foco fica no cabeçalho da sessão; aqui o cartão
+    // tinha só o modelo, e trocar de modo obrigava sair do Paralelo
+    const agBtn = el("button", { class: "p-agent", type: "button" });
+    // o rotulo e' o modo da sessao. agentLabel espera um agente, e a sessao
+    // tem id mas nao tem name: passando a sessao o botao mostrava o id.
+    const modoAtual = s.agent || "Build";
+    agBtn.textContent = modoAtual;
+    agBtn.title = "Modo: " + modoAtual + "  clique para trocar";
+    agBtn.onclick = (e) => {
+      e.stopPropagation();
+      openAgentPicker(agBtn, s);
+    };
+
     card.appendChild(
       el("div", { class: "p-head" },
         el("span", { class: "s-dot " + sessionState(s) }),
         title,
+        agBtn,
         modelBtn,
+        effBtn,
         contextCircle(sid, { pequeno: true }),
         makeStopButton(sid),
         pinBtn
@@ -3288,6 +3451,13 @@ function renderParalelo() {
     card.appendChild(body);
 
     const input = el("input", { placeholder: "Mensagem…" });
+    input.value = state.draft.cards[sid] || "";
+    const gravarCard = () => {
+      state.draft.cards[sid] = input.value;
+      store.set("draft.cards", state.draft.cards);
+    };
+    input.addEventListener("input", gravarCard);
+    input.addEventListener("change", gravarCard);
     const btn = el("button", { class: "send-btn", title: "Enviar" });
     btn.appendChild(icon("i-send"));
     const foot = el("div", { class: "p-foot", "data-alvo": sid });
@@ -3297,6 +3467,8 @@ function renderParalelo() {
       const anexos = anexosDe(sid);
       if (!texto && !anexos.length) return;
       input.value = "";
+      delete state.draft.cards[sid];
+      store.set("draft.cards", state.draft.cards);
       try {
         await api("send_prompt", {
           session_id: sid,
@@ -3331,6 +3503,17 @@ function renderParalelo() {
       renderParBody(card, sid);
       paintCardBusy(card, sid);
     });
+
+    if (focoAntes.has(sid)) {
+      const onde = focoAntes.get(sid);
+      requestAnimationFrame(() => {
+        const campo = $(".p-foot input", card);
+        if (!campo) return;
+        campo.focus({ preventScroll: true });
+        const fim = Math.min(onde, campo.value.length);
+        campo.setSelectionRange(fim, fim);
+      });
+    }
   }
   root.appendChild(grid);
 }
@@ -3863,16 +4046,21 @@ function openAgentPicker(anchor, s) {
       );
       row.title = a.description || "";
       row.onclick = async () => {
-        close();
-        try {
-          await api("switch_agent", { session_id: s.id, agent: a.id });
-          await refreshSessions();
-          renderSessionHeader();
-          toast("Agente alterado", "ok");
-        } catch (e) {
-          fail(e);
-        }
-      };
+          close();
+          try {
+            await api("switch_agent", { session_id: s.id, agent: a.id });
+            // aplica na hora: sem isso o cartao do Paralelo so trocava de
+            // rotulo quando a lista de sessoes voltasse, uns 2s depois
+            const vivo = sessionById(s.id);
+            if (vivo) vivo.agent = a.id;
+            if (state.selectedId === s.id) renderSessionHeader();
+            if (state.view === "paralelo") renderParalelo();
+            toast("Modo alterado", "ok");
+            refreshSessions();
+          } catch (e) {
+            fail(e);
+          }
+        };
       list.appendChild(row);
     }
     if (!agents.length) list.appendChild(el("div", { class: "pop-hint", text: "nenhum agente disponível" }));
@@ -3981,7 +4169,7 @@ function openEffortPicker(anchor, s) {
     const list = el("div", { class: "pop-list" });
     pop.appendChild(list);
 
-    const info = state.models.find((m) => modelBaseKey(m) === modelBaseKey(s.model));
+    const info = modeloNoCatalogo(s.model);
     // a variante atual entra na lista mesmo que o catalogo nao a traga
     const variants = [...new Set([...modelVariants(info), ...(s.model?.variant ? [s.model.variant] : [])])];
     const current = s.model?.variant || "";
@@ -4005,7 +4193,8 @@ function openEffortPicker(anchor, s) {
           const base = modelBaseKey(s.model);
           await api("switch_model", { session_id: s.id, model: `${base}#${v}` });
           await refreshSessions();
-          renderSessionHeader();
+          if (state.view === "paralelo") renderView();
+          else renderSessionHeader();
           toast(`Effort: ${v}${thinking ? " · thinking ligado" : " · thinking desligado"}`, "ok");
         } catch (e) {
           fail(e);
