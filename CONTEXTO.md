@@ -535,6 +535,30 @@ inferior ele cobriria a alca de redimensionar.
    diretório de trabalho. Para testar a detecção de diretório do zero, **reinicie
    o processo**.
 
+
+### A chave do modelo não é o que parece
+
+`modelKey`/`modelBaseKey` têm uma armadilha: o `id` de um modelo às vezes
+carrega um namespace (`inclusionai/ling-3.1-flash`) e às vezes vem só o nome.
+Um `.split("/").pop()` que existia aqui destruía esse prefixo, e a sessão nunca
+casia com o catálogo — o seletor de modelo e o de esforco ofereciam apenas a
+variante atual, sem as outras. A regra correta é tirar só o prefixo do
+**provedor** e manter o resto.
+
+### O rascunho não mora no DOM
+
+O composer é reconstruído a cada render (evento do stream, troca de modelo,
+trocade sessão, configuração). Texto, foco e cursor vivem em
+`state.draft.foco` / `state.draft.cards`, e `focusShell()` guarda esse estado
+antes de destruir o DOM para devolver depois. Sempre que criar um campo,
+lembre disso: o valor precisa sair do estado, não ser criado vazio.
+
+### A resposta do servidor nunca diminui
+
+`mergeServer` une o que veio do servidor com o que já estava na tela. Uma
+resposta vazia ou menor **não** apaga mensagens — `/api/session/{id}/message`
+às vezes responde com uma página ou antes de persistir.
+
 ---
 
 ## 13. Harness de testes
