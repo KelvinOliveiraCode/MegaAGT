@@ -10,19 +10,26 @@ App desktop (Tauri v2 + Rust) para o **OpenCode CLI v2**: todas as sessões em u
 - Barra lateral recolhível (`Ctrl+B`) para dar a largura inteira ao chat; o estado persiste.
 - Árvore de subagentes por `parentID`, com total por sessão.
 
+### Contexto, fila e entrega
+- **Círculo de contexto** no cabeçalho: quanto da janela o modelo ocupa. Verde, aviso em 70%, erro em 90%. O detalhe mostra usado, restante e limite, e tem atalho para **compactar**.
+- **Fila de mensagens**: com o modelo ocupado, a mensagem pode esperar. A faixa lista o que está na fila e cada item pode ser **Cancelar** (errou a mensagem) ou **Steer** (manda agora, antes da vez do modelo).
+- **Botão de entrega** no compositor: *automático* (respeita o trabalho em andamento), *agora* (corta a vez do modelo) ou *na fila*.
+- **Aviso de trabalho** no chat e nos cartões do Paralelo, com três pontos animados.
+
 ### Foco (chat)
 - Mensagens com markdown (títulos, listas aninhadas, tabelas, citações, cercas de código), *reasoning* e ferramentas recolhidos por padrão.
 - Texto longo do assistente é truncado com **"abrir para ler"**; saídas grandes de ferramenta com "ler mais N caracteres".
 - Reasoning com quebras de linha reais (o servidor às vezes entrega `\n` literal).
 - Troca de **agente** e **modelo** por popover com busca — o modelo mostra o provedor antes do nome e destaca o que está em uso.
 - Estatísticas de tokens (entrada/saída/raciocínio/cache), custo, diretório e estado da sessão.
+- Mensagens recém-enviadas não somem mais quando o histórico recarrega.
 - Ações: interromper, compactar, bifurcar (histórico inteiro ou a partir de uma mensagem), **reverter até uma mensagem**, mover para outro diretório, diff de arquivos, exportar e excluir.
 - Pedidos de permissão aparecem na hora, com Permitir / Sempre / Negar.
 - Slash commands do diretório com autocompletar (`/review`, `/init`, …).
 - Marcar sessão como vista quando ela fica ociosa.
 
 ### Paralelo
-Grade de sessões fixadas com streaming ao vivo e campo de mensagem por card.
+Sessões fixadas com streaming ao vivo e campo de mensagem por card. Cada cartão tem troca de modelo, círculo de contexto e botão de interromper. **Arraste o cabeçalho para reordenar** e **o canto inferior direito para redimensionar** — tamanho e ordem ficam gravados.
 
 ### Subagentes
 Escopado à sessão selecionada por padrão, com alternância para **todas as orquestrações**; cada subagente mostra agente, tokens e tempo, e abre um resumo das mensagens.
