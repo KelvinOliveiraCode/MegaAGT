@@ -162,6 +162,9 @@ abaixo custaram tempo e **não mudam** sem um teste:
 | Effort | É a **variante** do modelo: `provider/id#variante`. `none` desliga o raciocínio. 125 dos 144 modelos têm variante |
 | `session.json` | Falta quando o CLI nunca rodou → o app mostra o aviso "Abra o OpenCode uma vez" |
 | Erros | `error.message`, **não** `error.data.message` |
+| Fila (inbox) | `GET /inbox` lista, `DELETE /inbox/{id}` cancela, `PATCH /inbox/{id}` com `{delivery:"steer"}` promove. Só existe fila se o prompt for enviado com `delivery:"queue"` — sem o campo o servidor assume `steer`, e aí nada entra na fila |
+| Contexto | `tokens` da sessão é **acumulado** (serve para custo). O que ocupa a janela é `input + cache.read + reasoning` da **última mensagem do assistente**, sobre `limit.context` do modelo. `GET /context` devolve as mensagens desde a última compactação |
+| Agentes | `mode: "primary" \| "subagent"` separa as 6 primárias dos 271 subagentes |
 
 Credenciais: `~/.local/state/opencode/service.json` (`url` + `password`).
 
@@ -187,6 +190,7 @@ para todos:
 | Serviço | `service_status`, `ensure_service`, `start_service`, `restart_service`, `stop_service`, `service_diagnostics`, `cli_version`, `set_directory`, `default_location` |
 | Sessões | `list_sessions`, `get_session`, `create_session`, `rename_session`, `delete_session`, `delete_sessions`, `active_sessions`, `move_session`, `list_projects` |
 | Mensagens | `list_messages`, `send_prompt`, `interrupt_session`, `mark_viewed`, `get_session_log` |
+| Fila | `list_inbox`, `cancel_inbox`, `steer_inbox` |
 | Histórico | `compact_session`, `fork_session`, `stage_revert`, `commit_revert`, `clear_revert` |
 | Modelo/agente | `list_models`, `list_agents`, `list_commands`, `list_skills`, `switch_model`, `switch_agent`, `run_command` |
 | Diff/uso | `session_diff`, `session_stats`, `vcs_status` |
@@ -253,6 +257,10 @@ a escala de texto vale para o app inteiro de uma vez.
 | `applyClamps` | Recolhe texto longo com "abrir para ler" |
 | `openPopover` | Menu flutuante |
 | `errorText` / `errorBlock` | Erros (leem `error.message`) |
+| `setBusy` / `paintWorking` / `paintCardBusy` | Estado "ocupado" e a faixa de "trabalhando". **Todo** caminho que muda o estado passa por `setBusy`; escrever `state.busy[sid] = …` direto faz o aviso aparecer e sumir no ritmo errado |
+| `pushPending` / `mergePending` | Mensagem enviada localmente que o servidor ainda não devolveu. Sem isso o eco `local-*` é descartado no refetch e **o texto do usuário some da tela** |
+| `resolveDelivery` | automatico / agora / na fila |
+| `orderAgents` | Primárias primeiro, subagentes depois |
 | `refreshSessions` / `refreshMessages` / `renderSessionHeader` / `renderView` | Ciclo de render |
 | `handleEvent` | Traduz os eventos SSE |
 
