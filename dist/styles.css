@@ -649,9 +649,10 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 
 /* ============================================================ paralelo */
 .p-grid {
-  flex: 1; overflow-y: auto; padding: var(--sp-3);
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: var(--sp-3); align-content: start;
+  /* flex + largura em px: e' o que permite redimensionar cada janela por
+     arrasto. Com grid de colunas iguais isso nao da para fazer. */
+  display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start;
+  flex: 1; overflow-y: auto; padding: var(--sp-3); gap: 10px;
 }
 .p-card {
   display: flex; flex-direction: column; min-height: 300px; max-height: calc(100vh - 120px);
@@ -909,3 +910,116 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 /* o painel e' mais alto que os outros modais */
 .modal.wide { width: 520px; max-height: 88vh; display: flex; flex-direction: column; }
 .modal.wide .modal-body { overflow-y: auto; }
+
+/* ---------------- circulo de contexto ---------------- */
+.ctx {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 2px 7px 2px 3px; border-radius: var(--r-full);
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: var(--t-xs); font-weight: 600; color: var(--ink-2);
+}
+.ctx:hover { border-color: var(--line-2); color: var(--ink); }
+.ctx-ring { width: 22px; height: 22px; flex: none; transform: rotate(-90deg); }
+.ctx-ring.sm { width: 16px; height: 16px; }
+.ctx-ring .trk { fill: none; stroke: var(--line); stroke-width: 3.4; }
+.ctx-ring .val { fill: none; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dashoffset var(--dur); }
+.ctx-n { font-variant-numeric: tabular-nums; }
+
+.ctx-bar { height: 5px; border-radius: var(--r-full); background: var(--line); overflow: hidden; margin: 2px 11px 8px; }
+.ctx-fill { height: 100%; border-radius: var(--r-full); transition: width var(--dur); }
+.ctx-lines { padding: 0 11px 6px; }
+.ctx-line { display: flex; justify-content: space-between; gap: var(--sp-3); font-size: var(--t-xs); color: var(--muted); padding: 2px 0; }
+.ctx-line b { color: var(--ink-2); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---------------- fila de mensagens ---------------- */
+.inbox-strip {
+  display: flex; flex-direction: column; gap: 5px;
+  margin: 0 var(--sp-5) var(--sp-2);
+  padding: 8px 10px; border-radius: var(--r-md);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.inbox-title { font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--warn); }
+.inbox-row { display: flex; align-items: center; gap: var(--sp-2); }
+.inbox-badge {
+  flex: none; font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; padding: 1px 6px; border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn);
+}
+.inbox-row.steer .inbox-badge { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.inbox-text {
+  flex: 1 1 auto; min-width: 0; font-size: var(--t-sm); color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.inbox-row .btn.sm { font-size: var(--t-xs); padding: 2px 8px; flex: none; }
+
+/* ---------------- janelas em paralelo ---------------- */
+.p-card {
+  position: relative;
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); overflow: hidden;
+}
+.p-card.dragging { opacity: .88; box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+.p-card.resizing { user-select: none; }
+.p-card .p-head { cursor: grab; }
+.p-card .p-model {
+  max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--raised); flex: none;
+}
+.p-card .p-model:hover { color: var(--ink); border-color: var(--line-2); }
+.p-resize {
+  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+  cursor: nwse-resize; z-index: 5;
+  background:
+    linear-gradient(135deg, transparent 0 46%, var(--line-2) 46% 54%, transparent 54% 68%, var(--line-2) 68% 76%, transparent 76%);
+}
+.p-resize:hover { background:
+  linear-gradient(135deg, transparent 0 46%, var(--accent) 46% 54%, transparent 54% 68%, var(--accent) 68% 76%, transparent 76%); }
+
+/* ---------------- faixa de trabalho ---------------- */
+.working {
+  display: flex; align-items: center; gap: 7px;
+  margin: 8px 11px 2px; padding: 5px 9px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--busy) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--busy) 26%, transparent);
+  font-size: var(--t-xs); color: var(--busy);
+  width: fit-content;
+}
+.working-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.working-dots { display: inline-flex; gap: 3px; flex: none; }
+.working-dots i {
+  width: 4px; height: 4px; border-radius: 50%; background: currentColor;
+  animation: work-pulse 1.1s ease-in-out infinite;
+}
+.working-dots i:nth-child(2) { animation-delay: .16s; }
+.working-dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes work-pulse {
+  0%, 60%, 100% { opacity: .25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-dots i { animation: none; opacity: .7; }
+}
+
+/* ---------------- botao de entrega ---------------- */
+.deliv {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  align-self: flex-end; margin-bottom: 3px;
+  padding: 3px 7px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: var(--t-xs); color: var(--muted); white-space: nowrap;
+}
+.deliv:hover { color: var(--ink-2); border-color: var(--line-2); }
+.deliv svg { width: 12px; height: 12px; }
+.deliv.steer { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft); }
+.deliv.queue { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+
+/* ---------------- paralero: botao de parar ---------------- */
+.p-card .p-stop { width: 20px; height: 20px; flex: none; color: var(--err); }
+.p-card.busy { border-color: color-mix(in srgb, var(--busy) 45%, transparent); }
+.p-card.busy .p-head { background: color-mix(in srgb, var(--busy) 7%, transparent); }

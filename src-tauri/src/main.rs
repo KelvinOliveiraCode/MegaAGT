@@ -170,6 +170,44 @@ async fn stop_service(state: State<'_, AppState>) -> Result<Value, String> {
     Ok(json!({ "connected": false }))
 }
 
+// ---------------- fila (inbox) ----------------
+// Quando o modelo esta ocupado, um prompt novo NAO e entregue na hora: ele
+// entra na inbox como "queue". A API permite cancelar (DELETE) ou promover
+// para "steer", que entra antes da vez do modelo.
+
+/// Lista o que esta esperando na fila da sessao.
+#[tauri::command(rename_all = "snake_case")]
+async fn list_inbox(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    run(&state, move |api| {
+        let session_id = session_id.clone();
+        async move {
+            let items = api::paginate_get(&api, &format!("/api/session/{}/inbox", session_id), &[]).await?;
+            Ok(json!({ "data": items }))
+        }
+    })
+    .await
+}
+
+/// Cancela um item da fila.
+#[tauri::command(rename_all = "snake_case")]
+async fn cancel_inbox(state: State<'_, AppState>, session_id: String, inbox_id: String) -> Result<Value, String> {
+    run(&state, move |api| {
+        let path = format!("/api/session/{}/inbox/{}", session_id, inbox_id);
+        async move { api.delete(&path).await }
+    })
+    .await
+}
+
+/// Promove um item da fila para "steer": ele entra antes da vez do modelo.
+#[tauri::command(rename_all = "snake_case")]
+async fn steer_inbox(state: State<'_, AppState>, session_id: String, inbox_id: String) -> Result<Value, String> {
+    run(&state, move |api| {
+        let path = format!("/api/session/{}/inbox/{}", session_id, inbox_id);
+        async move { api.patch(&path, json!({ "delivery": "steer" })).await }
+    })
+    .await
+}
+
 /// Diagnostico do servico: onde esta o registro, se existe, onde esta o
 /// executavel do CLI, e se o servico responde.
 #[tauri::command(rename_all = "snake_case")]
@@ -392,21 +430,31 @@ async fn list_messages(state: State<'_, AppState>, session_id: String) -> Result
     .await
 }
 
+/// Envia um prompt.
+///
+/// `delivery` decide o que acontece quando o modelo ja esta ocupado:
+/// `queue` deixa a mensagem esperando — e ai ela pode ser cancelada ou
+/// promovida a steer. `steer` entrega na hora, cortando a vez do modelo.
+/// Ausente, o servidor escolhe, e hoje isso significa `steer`.
 #[tauri::command(rename_all = "snake_case")]
 async fn send_prompt(
     state: State<'_, AppState>,
     session_id: String,
     text: String,
+    delivery: Option<String>,
 ) -> Result<Value, String> {
     run(&state, move |api| {
         let session_id = session_id.clone();
         let text = text.clone();
+        let delivery = delivery.clone();
         async move {
-            api.post(
-                &format!("/api/session/{}/prompt", session_id),
-                json!({ "text": text }),
-            )
-            .await
+            let mut body = json!({ "text": text });
+            if let Some(d) = delivery.as_deref() {
+                if d == "queue" || d == "steer" {
+                    body["delivery"] = json!(d);
+                }
+            }
+            api.post(&format!("/api/session/{}/prompt", session_id), body).await
         }
     })
     .await
@@ -1045,6 +1093,9 @@ fn main() {
             delete_session,
             delete_sessions,
             list_messages,
+            list_inbox,
+            cancel_inbox,
+            steer_inbox,
             send_prompt,
             run_command,
             interrupt_session,
