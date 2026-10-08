@@ -208,6 +208,114 @@ async fn steer_inbox(state: State<'_, AppState>, session_id: String, inbox_id: S
     .await
 }
 
+// ---------------- anexos ----------------
+// O servidor NAO aceita caminho do Windows cru: "C:\\Users\\..." volta
+// 400 "Unsupported attachment URI". So aceita URI de arquivo no formato
+// file:///C:/Users/... (verificado contra o servico).
+//
+// Pastas tambem valem: o servico responde com application/x-directory e uma
+// listagem do conteudo, que e exatamente o que se quer anexar uma pasta.
+
+/// Converte um caminho do Windows em file URI aceito pelo servico.
+fn to_file_uri(path: &str) -> String {
+    let p = path.replace('\\', "/");
+    // Verificado contra o servico: file:///C:/Users/... e' aceito,
+    // file:///C/Users/... volta 400 "Invalid file URI". O dois-pontos da letra
+    // de unidade e' obrigatorio.
+    let mut uri = String::from("file:///");
+    if let Some((drive, resto)) = p.split_once(':') {
+        uri.push_str(drive);
+        uri.push(':');
+        if !resto.starts_with('/') {
+            uri.push('/');
+        }
+        uri.push_str(resto);
+    } else {
+        uri.push_str(p.trim_start_matches('/'));
+    }
+    // espacos e caracteres reservados precisam de escape
+    uri.replace(' ', "%20")
+        .replace('#', "%23")
+        .replace('?', "%3F")
+}
+
+/// Dialogo nativo de arquivos ou pasta, sem dependencia nova: WinForms via
+/// PowerShell. Devolve os caminhos escolhidos.
+#[tauri::command(rename_all = "snake_case")]
+async fn pick_paths(pasta: bool) -> Result<Value, String> {
+    let script = if pasta {
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object System.Windows.Forms.FolderBrowserDialog
+$d.Description = 'Escolha a pasta para anexar'
+if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }
+"#
+    } else {
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object System.Windows.Forms.OpenFileDialog
+$d.Title = 'Escolha os arquivos para anexar'
+$d.MultiSelect = $true
+$d.Filter = 'Todos os arquivos|*.*'
+if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write(($d.FileNames -join [char]1)) }
+"#
+    };
+
+    use std::process::{Command, Stdio};
+    let saida = Command::new("powershell")
+        .args(["-NoProfile", "-STA", "-Command", script])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("não foi possível abrir o seletor: {e}"))?;
+
+    let bruto = String::from_utf8_lossy(&saida.stdout).trim().to_string();
+    if bruto.is_empty() {
+        return Ok(json!({ "paths": [] }));
+    }
+    let caminhos: Vec<String> = bruto.split(char::from(1)).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string()).collect();
+
+    let anexos: Vec<Value> = caminhos
+        .iter()
+        .map(|c| {
+            let eh_pasta = std::path::Path::new(c).is_dir();
+            let nome = std::path::Path::new(c)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| c.clone());
+            let tamanho = std::fs::metadata(c).map(|m| m.len()).unwrap_or(0);
+            json!({
+                "path": c,
+                "uri": to_file_uri(c),
+                "name": nome,
+                "folder": eh_pasta,
+                "size": tamanho,
+            })
+        })
+        .collect();
+    Ok(json!({ "paths": anexos }))
+}
+
+/// Converte caminhos em anexos sem passar pelo seletor (usado no arrastar).
+#[tauri::command(rename_all = "snake_case")]
+async fn describe_paths(paths: Vec<String>) -> Result<Value, String> {
+    let anexos: Vec<Value> = paths
+        .iter()
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| {
+            let p = std::path::Path::new(c);
+            let nome = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| c.clone());
+            json!({
+                "path": c,
+                "uri": to_file_uri(c),
+                "name": nome,
+                "folder": p.is_dir(),
+                "size": std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+    Ok(json!({ "paths": anexos }))
+}
+
 /// Diagnostico do servico: onde esta o registro, se existe, onde esta o
 /// executavel do CLI, e se o servico responde.
 #[tauri::command(rename_all = "snake_case")]
@@ -442,17 +550,24 @@ async fn send_prompt(
     session_id: String,
     text: String,
     delivery: Option<String>,
+    files: Option<Vec<Value>>,
 ) -> Result<Value, String> {
     run(&state, move |api| {
         let session_id = session_id.clone();
         let text = text.clone();
         let delivery = delivery.clone();
+        let files = files.clone();
         async move {
             let mut body = json!({ "text": text });
             if let Some(d) = delivery.as_deref() {
                 if d == "queue" || d == "steer" {
                     body["delivery"] = json!(d);
                 }
+            }
+            // anexos: a API aceita {uri, name} por caminho, que e' o que
+            // interessa num app desktop — o modelo le do disco
+            if let Some(f) = files.filter(|f| !f.is_empty()) {
+                body["files"] = json!(f);
             }
             api.post(&format!("/api/session/{}/prompt", session_id), body).await
         }
@@ -743,15 +858,6 @@ async fn mark_viewed(
             )
             .await
         }
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-async fn get_session_log(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
-    run(&state, move |api| {
-        let session_id = session_id.clone();
-        async move { api.get(&format!("/api/experimental/session/{}/log", session_id)).await }
     })
     .await
 }
@@ -1117,12 +1223,13 @@ fn main() {
             reveal_in_explorer,
             open_external,
             open_folder,
+            pick_paths,
+            describe_paths,
             active_sessions,
             vcs_status,
             session_permissions,
             reply_permission,
             mark_viewed,
-            get_session_log,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
