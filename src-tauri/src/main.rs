@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Estado compartilhado: cliente da API (com diretório de trabalho) e o
 /// diretório atualmente selecionado.
@@ -1236,6 +1236,43 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 event_loop(handle).await;
             });
+
+            // Arrastar arquivo/pasta. Pegamos no evento de janela do proprio
+            // Tauri e reemitimos como "oc-solta": o evento de webview
+            // ("tauri://drag-drop") nao chegava de forma confiavel, e este e' o
+            // mesmo caminho de emit que ja traz os eventos do modelo.
+            if let Some(win) = app.get_webview_window("main") {
+                let h = app.handle().clone();
+                win.on_window_event(move |ev| {
+                    use tauri::WindowEvent;
+                    if let WindowEvent::DragDrop(d) = ev {
+                        let (tipo, caminhos, pos) = match d {
+                            tauri::DragDropEvent::Enter { paths, position } => (
+                                "enter",
+                                paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                                Some((position.x, position.y)),
+                            ),
+                            tauri::DragDropEvent::Over { position } => ("over", Vec::new(), Some((position.x, position.y))),
+                            tauri::DragDropEvent::Drop { paths, position } => (
+                                "drop",
+                                paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                                Some((position.x, position.y)),
+                            ),
+                            tauri::DragDropEvent::Leave => ("leave", Vec::new(), None),
+                            // DragDropEvent nao e' exaustivo nesta versao
+                            _ => ("leave", Vec::new(), None),
+                        };
+                        let _ = h.emit(
+                            "oc-solta",
+                            json!({
+                                "tipo": tipo,
+                                "caminhos": caminhos,
+                                "pos": pos.map(|(x, y)| json!({ "x": x, "y": y })),
+                            }),
+                        );
+                    }
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
