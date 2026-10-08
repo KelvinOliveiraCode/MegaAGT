@@ -24,6 +24,13 @@ expande o conteudo. No Paralelo, soltar sobre um cartao anexa nele; fora dos
 cartoes, o anexo vai para o Foco. Cada destino tem a sua faixa, com tamanho,
 remocao e "limpar", e o envio leva os arquivos junto com a mensagem.
 
+### Camera
+
+O botao no canto inferior direito trava a camera: as mensagens que chegam
+entram sozinhas na tela. Clique de novo e a visao fica onde voce deixar.
+Rolar para cima solta a camera sozinha — quem esta lendo nao e arrastado
+para o fim. Cada sessao guarda a sua, e cada cartao do Paralelo tem a sua.
+
 ### Foco (chat)
 - Mensagens com markdown (títulos, listas aninhadas, tabelas, citações, cercas de código), *reasoning* e ferramentas recolhidos por padrão.
 - Texto longo do assistente é truncado com **"abrir para ler"**; saídas grandes de ferramenta com "ler mais N caracteres".
@@ -65,6 +72,12 @@ do modelo — é assim que o OpenCode modela raciocínio.
 - Barras de rolagem finas em toda a interface, com trilho invisível.
 
 ### Ajustes
+
+Em **aparencia** alem do tema, do destaque e do tamanho do texto, ha
+**Detalhe das rodadas**: *Tudo* abre raciocinio, edicoes, shells e
+chamadas de ferramenta; *So raciocinio* mostra so o raciocinio e nem
+desenha o resto; *So ao abrir* e o comportamento anterior, nada abre
+sozinho.
 Painel completo (ícone de engrenagem na barra superior), em quatro seções:
 - **Serviço do OpenCode** — estado real (endereço, versão, caminho do executável), ligar/desligar o início automático, conectar, reiniciar e parar.
 - **Aparência** — tema, cor de destaque, tamanho do texto e raciocínio.

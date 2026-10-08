@@ -73,6 +73,11 @@ const state = {
   theme: store.get("theme", "meia-noite"),
   accent: store.get("accent", null),
   think: store.get("think", true),
+  // quanto do detalhe da rodada aparece sem o usuario pedir:
+  //   "tudo"       - raciocinio, edicoes, shells e chamadas de tool, tudo aberto
+  //   "raciocinio" - so o raciocinio; o resto nem e' desenhado
+  //   "nenhum"     - nada abre sozinho (comportamento anterior)
+  detalhe: store.get("detalhe", "nenhum"),
   directory: store.get("directory", null),
   autostart: store.get("autostart", true),
   clampPx: store.get("clampPx", 340),
@@ -97,6 +102,14 @@ const state = {
   permissions: {}, // sid -> array
   inbox: {}, // sid -> itens esperando na fila
   pending: {}, // sid -> recem-enviadas que o servidor ainda nao devolveu
+  // posicao de rolagem por area (`foco:<sid>` e `par:<sid>`) e se o usuario
+  // ainda esta colado no fim. Sem isso, qualquer redesenhe manda a visao para o
+  // fim e trocar de sessao comeca pelo comeco.
+  scroll: {},
+  seguir: {},
+  // camera travada (o fim gruda sozinho) ou livre (quem rola manda).
+  // Sem escolha explicita, herda da posicao atual — o comportamento antigo.
+  camera: {},
   // anexos por destino: `foco` e' o compositor do Foco, `cartoes` indexa pelo
   // sid de cada cartao do Paralelo. Soltar sobre um cartao anexa nele.
   anexos: { foco: [], cartoes: {} },
@@ -806,37 +819,122 @@ function scheduleRefetch(sid) {
 /* ============================================================
    Stream de eventos
    ============================================================ */
-/* Arrastar arquivo/pasta sobre a janela anexa. O Tauri 2 emite
-   'tauri://drag-drop' com os caminhos; nao precisa de dialogo nem de
-   permissao nova. */
+/* ============================================================
+   Arrastar arquivo/pasta
+   ============================================================ */
+/*
+ * Quem emite e' o Rust (evento de janela do Tauri, reemitido como "oc-solta").
+ * O evento de webview "tauri://drag-drop" nao chegava de forma confiavel.
+ */
 async function listenDragDrop() {
   try {
-    await listen("tauri://drag-drop", (ev) => {
+    await listen("oc-solta", (ev) => {
       const p = ev.payload || {};
-      const marcar = (sid) => {
-        for (const c of document.querySelectorAll(".p-card.alvo-solta")) c.classList.remove("alvo-solta");
-        if (sid) document.querySelector(`.p-card[data-sid="${sid}"]`)?.classList.add("alvo-solta");
-      };
-      if (p.type === "over" || p.type === "enter") {
-        state.soltarAlvo = p.paths?.length ? alvoNoPonto(p.position) : null;
+      const tipo = p.tipo;
+      const caminhos = p.caminhos || [];
+
+      if (tipo === "enter" || tipo === "over") {
         document.body.classList.add("soltando");
-        marcar(state.soltarAlvo);
+        const d = destinoDaSolta(p.pos);
+        for (const c of document.querySelectorAll(".p-card.alvo-solta")) c.classList.remove("alvo-solta");
+        if (d && d.alvo) document.querySelector(`.p-card[data-sid="${d.alvo}"]`)?.classList.add("alvo-solta");
         return;
       }
-      if (p.type === "drop" && p.paths?.length) {
-        const alvo = alvoNoPonto(p.position);
+      if (tipo === "drop" && caminhos.length) {
         document.body.classList.remove("soltando");
-        marcar(null);
-        state.soltarAlvo = null;
-        anexarCaminhos(p.paths, alvo);
+        for (const c of document.querySelectorAll(".p-card.alvo-solta")) c.classList.remove("alvo-solta");
+        soltarCaminhos(caminhos, p.pos);
         return;
       }
       document.body.classList.remove("soltando");
-      marcar(null);
-      state.soltarAlvo = null;
+      for (const c of document.querySelectorAll(".p-card.alvo-solta")) c.classList.remove("alvo-solta");
     });
   } catch (e) {
     console.warn("arrastar e soltar indisponivel", e);
+  }
+}
+
+/**
+ * Onde a solta aconteceu: o campo de um cartao do Paralelo ou o compositor do
+ * Foco. Sem posicao util (ou fora de qualquer campo), usa o que estiver visivel.
+ */
+function destinoDaSolta(pos) {
+  if (pos) {
+    const no = document.elementFromPoint(pos.x, pos.y);
+    const cartao = no?.closest?.(".p-card");
+    if (cartao) {
+      const campo = cartao.querySelector(".p-foot input");
+      if (campo) return { alvo: cartao.dataset.sid, campo };
+    }
+    const ta = no?.closest?.(".composer")?.querySelector("textarea") || $(".composer textarea");
+    if (ta) return { alvo: null, campo: ta };
+  }
+  // fora de qualquer campo: o destino e' sempre o Foco. Adivinhar um cartao do
+  // Paralelo seria silencioso e surprising — o anexo fica guardado e aparece
+  // quando o usuario for para o Foco.
+  const ta = $(".composer textarea");
+  return { alvo: null, campo: ta || null };
+}
+
+/**
+ * Indice do cursor correspondente a um ponto da tela dentro de um campo de
+ * texto. O WebView nao entrega isso, entao aproximamos por linha e coluna: a
+ * altura da linha vem do estilo e a largura media do caractere, do tamanho da
+ * fonte. Serve para o texto cair perto de onde o mouse soltou, que e' o que
+ * importa — nao precisa ser exato ao pixel.
+ */
+function indiceNoCampo(campo, x, y) {
+  const valor = campo.value || "";
+  const r = campo.getBoundingClientRect();
+  const cs = getComputedStyle(campo);
+  const altura = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4 || 18;
+  const fonte = parseFloat(cs.fontSize) || 13;
+  const padTop = parseFloat(cs.paddingTop) || 0;
+  const padLeft = parseFloat(cs.paddingLeft) || 0;
+
+  const linhas = valor.split("\n");
+  const yRel = y - r.top + campo.scrollTop - padTop;
+  const nLinha = Math.max(0, Math.min(linhas.length - 1, Math.floor(yRel / altura)));
+
+  let inicio = 0;
+  for (let k = 0; k < nLinha; k++) inicio += linhas[k].length + 1;
+
+  // largura media ~0.52em para fonte de proportional; ajuste por caret
+  const col = Math.max(0, Math.round((x - r.left - padLeft) / (fonte * 0.52)));
+  return Math.min(valor.length, inicio + Math.min(col, linhas[nLinha].length));
+}
+
+/** Escreve texto no campo, na posicao do cursor, e devolve o indice final. */
+function inserirNoCampo(campo, texto) {
+  if (!campo) return;
+  const ini = campo.selectionStart ?? campo.value.length;
+  const fim = campo.selectionEnd ?? ini;
+  campo.value = campo.value.slice(0, ini) + texto + campo.value.slice(fim);
+  const novo = ini + texto.length;
+  campo.setSelectionRange(novo, novo);
+  campo.dispatchEvent(new Event("input", { bubbles: true }));
+  campo.focus({ preventScroll: true });
+}
+
+/**
+ * Solta de verdade: escreve o caminho de cada item no campo, na posicao do
+ * mouse, e anexa o item para o modelo ler o conteudo. Os dois sao necessarios:
+ * o texto dalocaliza, o anexo entrega.
+ */
+async function soltarCaminhos(caminhos, pos) {
+  if (!caminhos?.length) return;
+  const d = destinoDaSolta(pos);
+  if (!d) return;
+  // sem campo visivel (por exemplo, so existe o Paralelo na tela) o caminho
+  // fica guardado para quando o Foco aparecer; o anexo vai sempre
+  if (d.campo) inserirNoCampo(d.campo, caminhos.join(", "));
+  try {
+    const r = await api("describe_paths", { paths: caminhos });
+    addAnexos(d.alvo, r?.paths || []);
+    const onde = d.alvo ? (sessionById(d.alvo)?.title || d.alvo) : "esta sessao";
+    toast((r?.paths || []).length + " anexo(s) para " + onde, "ok");
+  } catch (e) {
+    fail(e);
   }
 }
 
@@ -1117,7 +1215,15 @@ function appendStreaming(sid, mid, live) {
     inner.appendChild(node);
   }
   $(".msg-body", node)?.replaceWith(buildBody(sid, { id: mid, type: "assistant", content: [] }, live, true));
-  scroll.scrollTop = scroll.scrollHeight;
+  // streamed: so rola se o usuario ainda estava colado no fim. Quem subiu para
+  // ler nao pode ter a visao arrancada a cada token.
+  const chave = chaveRolagem("foco", sid);
+  ligarRolagem(scroll, chave);
+  if (cameraTravada(chave)) {
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "instant" });
+    state.scroll[chave] = scroll.scrollTop;
+    state.seguir[chave] = true;
+  }
 }
 
 let refreshQueued = false;
@@ -1358,12 +1464,14 @@ function focusShell() {
 
   const head = el("div", { class: "f-head" });
   head.id = "sessionHead";
+  const chat = el("div", { class: "chat-wrap" });
   const scroll = el("div", { class: "msg-scroll" }, el("div", { class: "msg-inner" }));
   scroll.id = "msgScroll";
+  chat.appendChild(scroll);
   const perms = el("div", { id: "permBar" });
   perms.className = "hidden";
   const composer = buildComposer(s);
-  root.append(head, perms, scroll, composer);
+  root.append(head, perms, chat, composer);
   renderMessages();
 }
 
@@ -1800,6 +1908,8 @@ function renderMessages() {
   const sid = state.selectedId;
   const msgs = state.messages[sid] || [];
   const inner = $(".msg-inner", scroll);
+  // measured before emptying: needed to anchor the cursor when loading older
+  const alturaAntes = scroll.scrollHeight;
   inner.textContent = "";
 
   if (!msgs.length && !state.live[sid]?.size) {
@@ -1848,8 +1958,8 @@ function renderMessages() {
     }
   }
 
-  scroll.scrollTop = scroll.scrollHeight;
   applyClamps(inner, ultimoId);
+  preservarRolagem(scroll, chaveRolagem("foco", sid), alturaAntes);
 }
 
 function messageNode(sid, m, live) {
@@ -1889,7 +1999,10 @@ function buildBody(sid, m, live, streaming = false) {
     const texts = content.filter((p) => p.type === "text");
     const tools = content.filter((p) => p.type === "tool");
 
-    if (state.think) {
+    // o raciocinio aparece no modo "tudo" e no "raciocinio" mesmo com o
+    // interruptor desligado: quem pediu para ver so isso quer ver
+    const raciocinioVisivel = state.think || state.detalhe !== "nenhum";
+    if (raciocinioVisivel) {
       for (const p of reasoning) {
         const t = normalizeText(p.text || "");
         if (t) body.appendChild(blockThink(sid, m.id, t));
@@ -1897,7 +2010,7 @@ function buildBody(sid, m, live, streaming = false) {
     }
     if (live) {
       for (const t of live.reasoning.values()) {
-        if (state.think && t) body.appendChild(blockThink(sid, m.id + ":live", t, true));
+        if (raciocinioVisivel && t) body.appendChild(blockThink(sid, m.id + ":live", t, true));
       }
     }
 
@@ -1927,8 +2040,11 @@ function buildBody(sid, m, live, streaming = false) {
     // o que deu errado, senao parece que o modelo simplesmente parou.
     if (m.error && !streaming) body.appendChild(errorBlock(m.error));
 
-    for (const p of tools) body.appendChild(blockTool(sid, m.id, p));
-    if (live) {
+    // no modo "So raciocinio" as chamadas nem sao desenhadas
+    if (!soRaciocinio()) {
+      for (const p of tools) body.appendChild(blockTool(sid, m.id, p));
+    }
+    if (live && !soRaciocinio()) {
       for (const [tid, t] of live.tools) {
         body.appendChild(
           blockTool(sid, m.id, {
@@ -2055,7 +2171,15 @@ function blockKey(sid, mid, kind) {
   return `${sid}|${mid}|${kind}`;
 }
 function isOpen(key) {
+  // no modo "tudo" nenhum bloco fica fechado; nos outros, vale o que o
+  // usuario abriu antes (e o que ele abrir agora continua valendo)
+  if (state.detalhe === "tudo") return true;
   return !!state.expanded[key];
+}
+
+/** Desenha so o raciocinio: ferramentas, shells e edicoes nem sao montados. */
+function soRaciocinio() {
+  return state.detalhe === "raciocinio";
 }
 
 function blockThink(sid, mid, text, streaming = false) {
@@ -2613,17 +2737,6 @@ async function anexarCaminhos(caminhos, alvo) {
   }
 }
 
-/**
- * Qual compositor esta sob o ponto do arrasto: um cartao do Paralelo ou o Foco.
- * Sem cartao sob o cursor, o anexo vai para o Foco — e o unico lugar onde da
- * para revisar a faixa antes de enviar.
- */
-function alvoNoPonto(pos) {
-  if (!pos) return null;
-  const alvo = document.elementFromPoint(pos.x, pos.y);
-  return alvo?.closest?.(".p-card")?.dataset.sid || null;
-}
-
 /** Botao de clipe: arquivos ou pasta, para um destino. */
 async function abrirSeletor(alvo, pasta) {
   try {
@@ -2647,6 +2760,157 @@ function botaoClipe(alvo, titulo) {
     abrirSeletor(alvo, true);
   };
   return b;
+}
+
+/* ---------------- rolagem ---------------- */
+/**
+ * Remember where the user was in each area and whether they were following the
+ * bottom. "Seguindo" means the cursor is glued to the last message: new content
+ * may scroll it, but if the person scrolled up to read something, nothing
+ * yanks the view back down.
+ */
+function chaveRolagem(prefixo, sid) {
+  return prefixo + ":" + sid;
+}
+
+/** Says if the container is close enough to the end to count as "following". */
+function noFim(scroll, folga = 48) {
+  if (!scroll) return true;
+  return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < folga;
+}
+
+/** Attaches the scroll listener once per container. */
+function ligarRolagem(scroll, chave) {
+  if (!scroll) return;
+  garantirCamera(scroll, chave);
+  if (scroll.__rolagemLigada) return;
+  scroll.__rolagemLigada = true;
+  scroll.addEventListener("scroll", () => {
+    // o evento chega depois do redesenho: num container ja descartado o
+    // scrollTop vale 0 e apagaria a posicao que acabamos de guardar
+    if (!scroll.isConnected) return;
+    state.scroll[chave] = scroll.scrollTop;
+    const noFimAgora = noFim(scroll);
+    state.seguir[chave] = noFimAgora;
+    // travada e o usuario subiu: a camera solta sozinha, e a rolagem volta a
+    // ser dele. Se ele desceu ate o fim de novo, a camera trava de volta.
+    state.camera[chave] = noFimAgora ? true : state.camera[chave] === true ? false : state.camera[chave];
+    pintarCamera(chave);
+  }, { passive: true });
+}
+
+/**
+ * Captures the position before the DOM is emptied and puts it back afterwards.
+ * When following, goes to the bottom; otherwise it restores where it was — this
+ * is what stops switching sessions from starting at the top.
+ */
+function preservarRolagem(scroll, chave, alturaAntes) {
+  // uma renderizacao pode chegar depois da troca de visao: o container antigo
+  // esta solto, o scrollTop dele vale 0 e gravar isso apaga a posicao real
+  if (!scroll || !scroll.isConnected) return;
+  ligarRolagem(scroll, chave);
+
+  const guardado = state.scroll[chave] ?? 0;
+  let alvo;
+  if (cameraTravada(chave)) {
+    alvo = scroll.scrollHeight;
+  } else if (guardado > 0) {
+    // quem esta lendo no meio volta para o meio.
+    // O delta so entra quando o conteudo ACIMA cresceu (carregar mais
+    // mensagens); se o container foi recriado vazio, aplicar o delta jogaria a
+    // visao para o fim — que e' exatamente o defeito corrigido aqui.
+    const recriado = alturaAntes == null || alturaAntes <= scroll.clientHeight + 8;
+    alvo = recriado ? guardado : guardado + (scroll.scrollHeight - alturaAntes);
+  } else {
+    // colado no fim, ou sessao que ainda nao foi visitada
+    alvo = scroll.scrollHeight;
+  }
+
+  // Grava a intencao agora e aplica no proximo quadro: escrever scrollTop antes
+  // do layout do navegador faz o valor voltar 0 — e era por isso que a rolagem
+  // sumia a cada troca de visao.
+  state.scroll[chave] = alvo;
+  const aplicar = () => {
+    if (!scroll.isConnected) return;
+    // instant: com scroll-behavior smooth a restauração anima e parece que a
+    // tela salta para o topo antes de descer
+    scroll.scrollTo({ top: alvo, behavior: "instant" });
+  };
+  if (scroll.scrollTop === alvo) return;
+  requestAnimationFrame(aplicar);
+}
+
+/* ---------------- camera ---------------- */
+/**
+ * Camera travada: as mensagens que chegam entram sozinhas na tela.
+ * Camera livre: a visao fica onde o usuario deixou e nada a puxa.
+ *
+ * Sem escolha explicita, herda da posicao atual — quem estava no fim continua
+ * colado no fim, quem subiu para ler nao e perturbado.
+ */
+function cameraTravada(chave) {
+  if (chave in state.camera) return state.camera[chave];
+  return state.seguir[chave] !== false;
+}
+
+/** Reflete o estado no botao. */
+function pintarCamera(chave) {
+  const b = document.querySelector(`[data-cam-btn="${chave}"]`);
+  if (!b) return;
+  const travada = cameraTravada(chave);
+  b.classList.toggle("on", travada);
+  b.title = travada
+    ? "Camera travada: acompanha as mensagens. Clique para soltar e controlar voce"
+    : "Camera livre: a visao fica onde voce deixar. Clique para travar e acompanhar";
+  b.setAttribute("aria-pressed", travada ? "true" : "false");
+}
+
+/** Trava ou solta a camera de uma area. */
+function alternarCamera(chave) {
+  const v = !cameraTravada(chave);
+  state.camera[chave] = v;
+  pintarCamera(chave);
+  const scroll = document.querySelector(`[data-cam="${chave}"]`);
+  if (!scroll) return;
+  if (v) {
+    rolarAoFim(scroll, chave);
+  } else {
+    // camera livre: `seguir` precisa refletir a posicao real agora, senao o
+    // streaming continua colando no fim ate o usuario rolar
+    state.seguir[chave] = noFim(scroll);
+  }
+}
+
+/** Vai ao fim sem animacao: smooth aqui produz o "sobe e desce" que incomodava. */
+function rolarAoFim(scroll, chave) {
+  if (!scroll || !scroll.isConnected) return;
+  scroll.scrollTo({ top: scroll.scrollHeight, behavior: "instant" });
+  state.scroll[chave] = scroll.scrollTop;
+  state.seguir[chave] = true;
+}
+
+/** Cria o botao de camera uma vez por area de rolagem. */
+function garantirCamera(scroll, chave) {
+  if (!scroll) return;
+  scroll.dataset.cam = chave;
+  if (document.querySelector(`[data-cam-btn="${chave}"]`)) return;
+  const alvo = scroll.parentElement;
+  if (!alvo) return;
+  alvo.classList.add("com-camera");
+  const b = el("button", { class: "cam-btn", type: "button" });
+  b.dataset.camBtn = chave;
+  b.appendChild(icon("i-pin"));
+  b.onclick = (e) => {
+    e.stopPropagation();
+    alternarCamera(chave);
+  };
+  // no cartao do Paralelo o botao entra no cabecalho: no canto inferior ele
+  // ficava por cima da alca de redimensionar
+  const cartao = alvo.classList?.contains("p-card") ? alvo : alvo.closest(".p-card");
+  const cab = cartao?.querySelector(".p-head");
+  if (cab) cab.insertBefore(b, cab.lastElementChild);
+  else alvo.appendChild(b);
+  pintarCamera(chave);
 }
 
 /* ============================================================
@@ -3084,10 +3348,10 @@ function renderParBody(card, sid) {
     }
   }
   paintWorking(body, sid);
-  body.scrollTop = body.scrollHeight;
   // a ultima resposta do cartao tambem nao e' recolhida
   const ultimo = msgs.slice(-40).reverse().find((m) => m.type === "assistant");
   applyClamps(inner, ultimo ? msgKey(sid, ultimo.id) : null);
+  preservarRolagem(body, chaveRolagem("par", sid));
 }
 
 /* ============================================================
@@ -3957,6 +4221,33 @@ function openSettings() {
     fsBox.appendChild(b);
   }
   gApar.appendChild(el("div", { class: "set-row" }, el("div", { class: "grow" }, el("span", { class: "lbl", text: "Tamanho do texto" })), fsBox));
+
+  // Detalhe das rodadas: quanto aparece sem o usuario pedir.
+  //   Tudo          -> raciocinio, edicoes, shells e tool, todos abertos
+  //   So raciocinio  -> so o raciocinio; o resto nem e' desenhado
+  //   So ao abrir   -> nada abre sozinho (o comportamento anterior)
+  const MODOS = [
+    ["tudo", "Tudo", "Raciocínio, edições, shells e chamadas de ferramenta, tudo aberto"],
+    ["raciocinio", "Só raciocínio", "Mostra o raciocínio e esconde o resto"],
+    ["nenhum", "Só ao abrir", "Nada abre sozinho: você abre o que quiser"],
+  ];
+  const detBox = el("div", { class: "detalhe-opcoes" });
+  for (const [v, rot, dica] of MODOS) {
+    const b = el("button", { class: state.detalhe === v ? "on" : "", type: "button", text: rot, title: dica });
+    b.onclick = () => {
+      state.detalhe = v;
+      store.set("detalhe", v);
+      for (const x of detBox.children) x.classList.remove("on");
+      b.classList.add("on");
+      renderMessages();
+      if (state.view === "paralelo") renderParalelo();
+    };
+    detBox.appendChild(b);
+  }
+  gApar.appendChild(el("div", { class: "set-row" },
+    el("div", { class: "grow" }, el("span", { class: "lbl", text: "Detalhe das rodadas" })),
+    detBox
+  ));
 
   gApar.appendChild(
     setSwitch("Mostrar raciocínio", state.think, (v) => {

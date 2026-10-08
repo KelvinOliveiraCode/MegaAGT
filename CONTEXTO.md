@@ -281,6 +281,25 @@ a escala de texto vale para o app inteiro de uma vez.
 O usuario anexa arrastando para a janela ou pelo botao de clipe. Um anexo e' um
 `{path, uri, name, folder, size}` e fica no estado ate o envio.
 
+### Como o arraste chega
+
+Quem emite e' o **Rust**: `WindowEvent::DragDrop` no `setup` e' reemitido
+como `oc-solta` com `{tipo, caminhos, pos}`. O evento de webview
+`tauri://drag-drop` **nao chegava** — era por isso que arrastar nao
+fazia nada. `dragDropEnabled: true` tambem esta explicito no
+`tauri.conf.json`, mesmo sendo o padrao do Tauri 2.
+
+Na solta o app faz duas coisas, e as duas sao necessarias:
+
+1. **escreve o caminho** no campo, na posicao do mouse (`indiceNoCampo`
+   estima linha e coluna pela geometria; o WebView nao entrega isso);
+2. **anexa o item**, para o modelo ler o conteudo.
+
+O destino e' resolvido por `destinoDaSolta(pos)`: campo de um cartao do
+Paralelo, o textarea do Foco, ou — fora de qualquer campo — o Foco, que e'
+onde o anexo fica guardado. Nunca adivinha um cartao: adivinhar em silencio
+era pior do que guardar no lugar previsivel.
+
 **Os anexos sao por destino.** `state.anexos = { foco: [], cartoes: {} }`:
 `foco` e' o compositor do Foco e `cartoes` indexa pelo sid de cada cartao do
 Paralelo. `anexosDe(alvo)` devolve a lista do destino (alvo nulo = Foco). Soltar
@@ -434,6 +453,34 @@ Adicione o botão em `index.html`, um caso em `renderView`, e guarde o nome em
 3. `toolOutputText()` já achata `{type:"text"}` e `{type:"file"}`.
 
 ---
+
+## 11b. Rolagem e camera
+
+`state.scroll[chave]` guarda a posicao e `state.camera[chave]` se a camera
+esta travada. A chave e' `foco:<sid>` ou `par:<sid>`.
+
+Quatro coisas quebraram a rolagem antes de funcionar, e todas as quatro
+precisam ser respeitadas por quem mexer nesse codigo:
+
+1. `focusShell()` **destroi e recria** o `#msgScroll` a cada troca de visao.
+   Qualquer coisa que guarde referencia do elemento antigo escreve em
+   nada.
+2. O evento `scroll` chega **assincrono**. Um container ja descartado tem
+   `scrollTop === 0`; sem o guarda `if (!scroll.isConnected) return`, um
+   evento tardio apaga a posicao salva.
+3. `scrollTop = x` **antes do layout** volta 0. A restauracao e' feita em
+   `requestAnimationFrame`.
+4. `.msg-scroll` tem `scroll-behavior: smooth`, que faz a restauracao
+   **animar** — e foi o que produzia o "sobe para o topo e depois desce".
+   Por isso toda escrita de scrollTop usa `scrollTo({behavior:"instant"})`.
+
+**Camera travada** significa que o fim gruda sozinho. Duas regras que
+valem: soltar a camera precisa atualizar `state.seguir` na hora (senao o
+streaming continua colando no fim), e **rolar para cima solta a camera**
+sozinho — e o proprio gesto de leitura, nao uma falha.
+
+No Paralelo o botao da camera fica no cabecalho do cartao: no canto
+inferior ele cobriria a alca de redimensionar.
 
 ## 12. Armadilhas
 

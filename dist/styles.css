@@ -900,13 +900,13 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 }
 .set-acts { display: flex; gap: var(--sp-2); flex-wrap: wrap; padding: 2px 11px 4px; }
 .set-acts .btn { font-size: var(--t-sm); }
-.fsize { display: flex; gap: 3px; }
-.fsize button {
+.fsize, .detalhe-opcoes { display: flex; gap: 3px; }
+.fsize button, .detalhe-opcoes button {
   min-width: 30px; padding: 3px 6px; font-size: var(--t-xs); font-weight: 600;
   border: 1px solid var(--line); background: var(--raised); color: var(--ink-2);
   border-radius: var(--r-sm);
 }
-.fsize button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.fsize button.on, .detalhe-opcoes button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 /* o painel e' mais alto que os outros modais */
 .modal.wide { width: 520px; max-height: 88vh; display: flex; flex-direction: column; }
 .modal.wide .modal-body { overflow-y: auto; }
@@ -1088,3 +1088,36 @@ body.soltando::after {
   border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
   padding-left: 7px;
 }
+
+/* ---------------- camera ---------------- */
+/* contêiner posicionado do chat: abriga o botão de câmera */
+.chat-wrap {
+  position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.com-camera { position: relative; }
+
+.cam-btn {
+  position: absolute; right: 16px; bottom: 14px; z-index: 6;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--line); border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--muted); cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: color .12s, border-color .12s, background .12s;
+}
+.cam-btn svg { width: 14px; height: 14px; }
+.cam-btn:hover { color: var(--ink-2); border-color: var(--line-2); }
+.cam-btn.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+/* no Paralelo o botão fica no cabeçalho do cartão, no fluxo: se fosse
+   absoluto no canto inferior, cobriria a alça de redimensionar */
+.p-card .cam-btn { position: static; width: 22px; height: 22px; flex: none; border-radius: var(--r-sm); }
+.p-card .cam-btn svg { width: 12px; height: 12px; }
+
+/* com a câmera travada o fim da lista pode respirar */
+.msg-scroll.cam-travada { scroll-behavior: auto; }
