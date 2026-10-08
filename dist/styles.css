@@ -1023,3 +1023,60 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 .p-card .p-stop { width: 20px; height: 20px; flex: none; color: var(--err); }
 .p-card.busy { border-color: color-mix(in srgb, var(--busy) 45%, transparent); }
 .p-card.busy .p-head { background: color-mix(in srgb, var(--busy) 7%, transparent); }
+
+/* ---------------- anexos ---------------- */
+.anexos-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0 var(--sp-3) 6px;
+}
+.anexo {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 260px;
+  padding: 4px 5px 4px 8px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: var(--t-xs); color: var(--ink-2);
+}
+.anexo svg { width: 13px; height: 13px; flex: none; color: var(--muted); }
+.anexo.pasta { border-color: color-mix(in srgb, var(--accent) 34%, transparent); }
+.anexo.pasta svg { color: var(--accent); }
+.anx-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.anx-tam { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.anx-x {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0; border: none; border-radius: var(--r-sm);
+  background: none; color: var(--muted); cursor: pointer;
+}
+.anx-x:hover { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+.anx-x svg { width: 10px; height: 10px; }
+.anx-limpar {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: var(--t-xs); padding: 2px 4px; border-radius: var(--r-sm);
+}
+.anx-limpar:hover { color: var(--ink-2); background: var(--hover); }
+.deliv.clip { color: var(--muted); }
+.deliv.clip:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* arrastar arquivo sobre a janela */
+body.soltando::after {
+  content: "solte para anexar";
+  position: fixed; inset: 12px; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--accent); font-size: var(--t-lg); font-weight: 600;
+  pointer-events: none;
+}
+
+/* ---------------- paralero: anexos ---------------- */
+/* O pe do cartao e' flex: a faixa precisa de linha propria acima do campo. */
+.p-foot { flex-wrap: wrap; }
+.p-foot .anexos-bar { flex: 1 0 100%; order: -1; margin: 0 0 4px; }
+.p-foot .deliv.clip { align-self: center; margin-bottom: 0; padding: 3px 5px; }
+.p-foot .anexo { max-width: 190px; }
+
+/* cartao sob o cursor quando ha arquivo sendo arrastado */
+.p-card.alvo-solta {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.p-card.alvo-solta .p-body { opacity: .55; }

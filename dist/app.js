@@ -97,6 +97,10 @@ const state = {
   permissions: {}, // sid -> array
   inbox: {}, // sid -> itens esperando na fila
   pending: {}, // sid -> recem-enviadas que o servidor ainda nao devolveu
+  // anexos por destino: `foco` e' o compositor do Foco, `cartoes` indexa pelo
+  // sid de cada cartao do Paralelo. Soltar sobre um cartao anexa nele.
+  anexos: { foco: [], cartoes: {} },
+  soltarAlvo: null, // cartao sob o cursor enquanto o usuario arrasta
   parOrder: store.get("parOrder", []),
   parSize: store.get("parSize", {}),
 
@@ -802,6 +806,40 @@ function scheduleRefetch(sid) {
 /* ============================================================
    Stream de eventos
    ============================================================ */
+/* Arrastar arquivo/pasta sobre a janela anexa. O Tauri 2 emite
+   'tauri://drag-drop' com os caminhos; nao precisa de dialogo nem de
+   permissao nova. */
+async function listenDragDrop() {
+  try {
+    await listen("tauri://drag-drop", (ev) => {
+      const p = ev.payload || {};
+      const marcar = (sid) => {
+        for (const c of document.querySelectorAll(".p-card.alvo-solta")) c.classList.remove("alvo-solta");
+        if (sid) document.querySelector(`.p-card[data-sid="${sid}"]`)?.classList.add("alvo-solta");
+      };
+      if (p.type === "over" || p.type === "enter") {
+        state.soltarAlvo = p.paths?.length ? alvoNoPonto(p.position) : null;
+        document.body.classList.add("soltando");
+        marcar(state.soltarAlvo);
+        return;
+      }
+      if (p.type === "drop" && p.paths?.length) {
+        const alvo = alvoNoPonto(p.position);
+        document.body.classList.remove("soltando");
+        marcar(null);
+        state.soltarAlvo = null;
+        anexarCaminhos(p.paths, alvo);
+        return;
+      }
+      document.body.classList.remove("soltando");
+      marcar(null);
+      state.soltarAlvo = null;
+    });
+  } catch (e) {
+    console.warn("arrastar e soltar indisponivel", e);
+  }
+}
+
 async function connectEvents() {
   try {
     await listen("oc-stream", (e) => {
@@ -1484,7 +1522,8 @@ function setBusy(sid, valor) {
   if (card) paintCardBusy(card, sid);
   if (sid === state.selectedId) {
     renderSessionHeader();
-    if (state.view === "foco") renderComposer();
+    // o composer mostra agente e modelo, nao o estado de ocupado: nao ha nada
+    // a recriar aqui (ele vive dentro de renderView)
   }
 }
 
@@ -1758,7 +1797,6 @@ async function replyPerm(sid, p, decision) {
 function renderMessages() {
   const scroll = $("#msgScroll");
   if (!scroll) return;
-  if (!scroll) return;
   const sid = state.selectedId;
   const msgs = state.messages[sid] || [];
   const inner = $(".msg-inner", scroll);
@@ -1774,8 +1812,26 @@ function renderMessages() {
     return;
   }
 
+  // O DOM cresce sem limite numa sessao longa (centenas de mensagens) e a
+  // rolagem fica pesada. Corta o historico antigo e deixa um botao para abrir.
+  const LIMITE = 300;
+  const cortado = Math.max(0, msgs.length - LIMITE);
+  let visiveis = msgs;
+  if (cortado > 0) {
+    visiveis = msgs.slice(cortado);
+    const mais = el("button", { class: "clamp-btn", type: "button", text: "carregar mais " + fmtNum(cortado) + " mensagens anteriores" });
+    mais.onclick = () => {
+      state.limiteMsgs = (state.limiteMsgs || LIMITE) + LIMITE;
+      renderMessages();
+    };
+    inner.appendChild(mais);
+  }
+
+  const ultimoAssistente = [...msgs].reverse().find((m) => m.type === "assistant");
+  const ultimoId = ultimoAssistente ? msgKey(sid, ultimoAssistente.id) : null;
+
   let lastDay = "";
-  for (const m of msgs) {
+  for (const m of visiveis) {
     const created = m.time?.created || 0;
     const day = created ? new Date(created).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" }) : "";
     if (day && day !== lastDay) {
@@ -1793,7 +1849,7 @@ function renderMessages() {
   }
 
   scroll.scrollTop = scroll.scrollHeight;
-  applyClamps(inner);
+  applyClamps(inner, ultimoId);
 }
 
 function messageNode(sid, m, live) {
@@ -2407,10 +2463,16 @@ function preWithLimit(text, limit = outChars()) {
   return wrap;
 }
 
-/** Recolhe blocos de texto longo do assistente. */
-function applyClamps(root) {
+/**
+ * Recolhe blocos de texto longo do assistente.
+ *
+ * `ultimoId` fica de fora de proposito: a resposta que o usuario esta
+ * esperando nao pode virar um bloco cortado com botao.
+ */
+function applyClamps(root, ultimoId) {
   for (const node of $$(".prose", root)) {
     if (node.closest(".clamp")) continue;
+    if (ultimoId && node.closest(".msg")?.dataset.msg === ultimoId) continue;
     if (clampPx() <= 0 || node.scrollHeight <= clampPx()) continue;
     // wrapper externo (estado) + interno (corte). O degradado fica no
     // padding do interno, entao nunca cobre a ultima linha de texto.
@@ -2444,19 +2506,162 @@ function resolveDelivery(sid) {
 
 const DELIVERY_NOMES = { auto: "automático", steer: "agora", queue: "na fila" };
 
+/* ---------------- anexos ---------------- */
+/** Humaniza o tamanho para o chip. */
+function fmtBytes(n) {
+  if (!n) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  return (n / 1024 / 1024 / 1024).toFixed(1) + " GB";
+}
+
+/**
+ * Anexos de um destino. `alvo` nulo e' o compositor do Foco; um sid e' o cartao
+ * daquela sessao no Paralelo.
+ */
+function anexosDe(alvo) {
+  if (!alvo) return (state.anexos.foco ||= []);
+  return (state.anexos.cartoes[alvo] ||= []);
+}
+
+/** Junta sem duplicar o mesmo caminho. */
+function addAnexos(alvo, lista) {
+  const alvo_ = anexosDe(alvo);
+  const atuais = new Set(alvo_.map((a) => a.path));
+  let mudou = false;
+  for (const a of lista || []) {
+    if (!a?.path || atuais.has(a.path)) continue;
+    if (alvo_.length >= 30) {
+      toast("Limite de 30 anexos por mensagem", "err");
+      break;
+    }
+    alvo_.push(a);
+    atuais.add(a.path);
+    mudou = true;
+  }
+  if (mudou) renderAnexos();
+  return mudou;
+}
+
+function limparAnexos(alvo) {
+  if (alvo) delete state.anexos.cartoes[alvo];
+  else state.anexos.foco = [];
+  renderAnexos();
+}
+
+/**
+ * Monta a faixa de anexos dentro de um composer especifico.
+ *
+ * O renderAnexos antigo pendurava a faixa no primeiro .composer da pagina e
+ * parava. Como o composer e' reconstruido a cada render (e o do Paralelo e'
+ * outro elemento), a faixa sumia sozinha. Aqui ela e' filha do proprio
+ * composer, que a recria junto.
+ */
+function mountAnexos(wrap, alvo) {
+  if (!wrap) return;
+  $(".anexos-bar", wrap)?.remove();
+  const lista = anexosDe(alvo);
+  if (!lista.length) return;
+  const inner = $(".composer-inner", wrap) || wrap;
+  const bar = el("div", { class: "anexos-bar" });
+  for (const a of lista) {
+    const chip = el("span", { class: "anexo" + (a.folder ? " pasta" : "") },
+      icon(a.folder ? "i-folder" : "i-file"),
+      el("span", { class: "anx-nome", text: a.name, title: a.path }),
+      a.folder ? el("span", { class: "anx-tam", text: "pasta" }) : el("span", { class: "anx-tam", text: fmtBytes(a.size) })
+    );
+    const x = el("button", { class: "anx-x", type: "button", title: "Remover", "aria-label": "Remover " + a.name });
+    x.appendChild(icon("i-x"));
+    x.onclick = (e) => {
+      e.stopPropagation();
+      const l = anexosDe(alvo);
+      l.splice(l.findIndex((y) => y.path === a.path), 1);
+      renderAnexos();
+    };
+    chip.appendChild(x);
+    bar.appendChild(chip);
+  }
+  const limpar = el("button", { class: "anx-limpar", type: "button", text: "limpar" });
+  limpar.onclick = () => limparAnexos(alvo);
+  bar.appendChild(limpar);
+  inner.prepend(bar);
+}
+
+/** Faixa de anexos em todos os composers da tela: Foco e cartoes do Paralelo. */
+function renderAnexos() {
+  for (const c of $$(".composer")) mountAnexos(c, c.dataset.alvo || null);
+  for (const c of $$(".p-foot")) mountAnexos(c, c.dataset.alvo || null);
+}
+
+/** Caminhos arrastados -> anexos de um destino. */
+async function anexarCaminhos(caminhos, alvo) {
+  if (!caminhos?.length) return;
+  try {
+    const r = await api("describe_paths", { paths: caminhos });
+    addAnexos(alvo, r?.paths || []);
+    if (anexosDe(alvo).length) {
+      const onde = alvo ? (sessionById(alvo)?.title || alvo) : "esta sessao";
+      toast((r?.paths || []).length + " anexo(s) para " + onde, "ok");
+    }
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/**
+ * Qual compositor esta sob o ponto do arrasto: um cartao do Paralelo ou o Foco.
+ * Sem cartao sob o cursor, o anexo vai para o Foco — e o unico lugar onde da
+ * para revisar a faixa antes de enviar.
+ */
+function alvoNoPonto(pos) {
+  if (!pos) return null;
+  const alvo = document.elementFromPoint(pos.x, pos.y);
+  return alvo?.closest?.(".p-card")?.dataset.sid || null;
+}
+
+/** Botao de clipe: arquivos ou pasta, para um destino. */
+async function abrirSeletor(alvo, pasta) {
+  try {
+    const r = await api("pick_paths", { pasta });
+    if (r?.paths?.length) addAnexos(alvo, r.paths);
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/** Botao de clipe para um compositor: clique abre arquivos, direito abre pasta. */
+function botaoClipe(alvo, titulo) {
+  const b = el("button", { class: "deliv clip", type: "button", title: titulo });
+  b.appendChild(icon("i-file-plus"));
+  b.onclick = (e) => {
+    e.stopPropagation();
+    abrirSeletor(alvo, false);
+  };
+  b.oncontextmenu = (e) => {
+    e.preventDefault();
+    abrirSeletor(alvo, true);
+  };
+  return b;
+}
+
 /* ============================================================
    Compositor
    ============================================================ */
 function buildComposer(s) {
   const wrap = el("div", { class: "composer" });
   const inner = el("div", { class: "composer-inner" });
+  mountAnexos(wrap, null); // os anexos ja pendientes entram no composer recem-nascido
   const box = el("div", { class: "composer-box" });
   const ta = el("textarea", { rows: "1", placeholder: "Mensagem para a sessão...", spellcheck: "false" });
   const send = el("button", { class: "send-btn", title: "Enviar (Enter)" });
   send.appendChild(icon("i-send"));
   // botao de entrega: agora (corta a vez do modelo) ou na fila (espera)
   const entrega = el("button", { class: "deliv", type: "button", title: "Como entregar a mensagem" });
-  box.append(entrega, ta, send);
+  // clipe: arquivos e pasta. O seletor e' o dialogo nativo do Windows; o
+  // arrastar-e-soltar tambem funciona e nao precisa dele.
+  const clip = botaoClipe(null, "Anexar arquivos (ou arraste para a janela)");
+  box.append(clip, entrega, ta, send);
   const paintEntrega = () => {
     entrega.textContent = "";
     entrega.className = "deliv " + state.delivery;
@@ -2534,14 +2739,20 @@ function buildComposer(s) {
       if (known) {
         await api("run_command", { session_id: s.id, name: cmdMatch[1], text: cmdMatch[2] });
       } else {
-        await api("send_prompt", { session_id: s.id, text, delivery: resolveDelivery(s.id) });
+        await api("send_prompt", {
+          session_id: s.id,
+          text,
+          delivery: resolveDelivery(s.id),
+          files: anexosDe(null).map((a) => ({ uri: a.uri, name: a.name })),
+        });
       }
       setBusy(s.id, true);
       renderSessionHeader();
       // eco otimista: fica guardado como pendencia ate o servidor devolver a
       // mensagem de verdade, senao ela some da tela no proximo refetch
-      pushPending(s.id, text, []);
+      pushPending(s.id, text, anexosDe(null).map((a) => ({ name: a.name, folder: a.folder, size: a.size })));
       state.messages[s.id] = mergePending(s.id, state.messages[s.id] || []);
+      limparAnexos(null);
       renderMessages();
       queueSessionRefresh();
       setTimeout(refreshPermissions, 600, s.id);
@@ -2602,6 +2813,8 @@ function buildComposer(s) {
    Visao Paralelo
    ============================================================ */
 /* ---------------- janelas em paralelo ---------------- */
+/** Verdadeiro enquanto o usuario arrasta ou redimensiona um cartao. */
+let parAjustando = false;
 const PAR_MIN_W = 300;
 const PAR_MIN_H = 260;
 const PAR_MAX_W = 1100;
@@ -2632,12 +2845,14 @@ function makeCardDraggable(card, sid) {
       if (ev.target.closest("button")) return;
       const ini = { x: ev.clientX, y: ev.clientY };
       let arrastando = false;
+        let novaOrdem = null;
       const mover = (e) => {
         const dx = e.clientX - ini.x;
         const dy = e.clientY - ini.y;
         if (!arrastando && Math.hypot(dx, dy) < 6) return;
         if (!arrastando) {
           arrastando = true;
+          parAjustando = true;
           card.classList.add("dragging");
           head.style.cursor = "grabbing";
         }
@@ -2657,14 +2872,16 @@ function makeCardDraggable(card, sid) {
             melhor = c;
           }
         }
+        // recalcula sempre a partir da ordem REAL (state.parOrder ainda nao foi
+        // mexido), senao cada quadro desfaz a troca do anterior
         if (melhor) {
-          const ids = parOrder(state.pins.filter((x) => sessionById(x)));
-          const de = ids.indexOf(sid);
-          const para = ids.indexOf(melhor.dataset.sid);
+          const atual = parOrder(state.pins.filter((x) => sessionById(x)));
+          const de = atual.indexOf(sid);
+          const para = atual.indexOf(melhor.dataset.sid);
           if (de > -1 && para > -1 && de !== para) {
-            ids.splice(para, 0, ids.splice(de, 1)[0]);
-            state.parOrder = ids;
-            store.set("parOrder", ids);
+            const destino = atual.slice();
+            destino.splice(para, 0, destino.splice(de, 1)[0]);
+            novaOrdem = destino; // so um rascunho: grava ao soltar
           }
         }
       };
@@ -2675,6 +2892,11 @@ function makeCardDraggable(card, sid) {
         card.style.transform = "";
         card.style.zIndex = "";
         head.style.cursor = "grab";
+        parAjustando = false;
+        if (novaOrdem) {
+          state.parOrder = novaOrdem;
+          store.set("parOrder", novaOrdem);
+        }
         if (arrastando) renderParalelo();
       };
       document.addEventListener("pointermove", mover);
@@ -2688,6 +2910,7 @@ function makeCardDraggable(card, sid) {
     ev.stopPropagation();
     const r = card.getBoundingClientRect();
     const ini = { x: ev.clientX, y: ev.clientY, w: r.width, h: r.height };
+    parAjustando = true;
     card.classList.add("resizing");
     const mover = (e) => {
       card.style.width = clampNum(ini.w + (e.clientX - ini.x), PAR_MIN_W, PAR_MAX_W) + "px";
@@ -2697,6 +2920,7 @@ function makeCardDraggable(card, sid) {
       document.removeEventListener("pointermove", mover);
       document.removeEventListener("pointerup", soltar);
       card.classList.remove("resizing");
+      parAjustando = false;
       state.parSize[sid] = {
         w: Math.round(clampNum(parseFloat(card.style.width) || ini.w, PAR_MIN_W, PAR_MAX_W)),
         h: Math.round(clampNum(parseFloat(card.style.height) || ini.h, PAR_MIN_H, PAR_MAX_H)),
@@ -2736,6 +2960,9 @@ function shortModelTag(s) {
 function renderParalelo() {
   const root = $("#viewRoot");
   if (!root) return;
+  // nao recria os cartoes no meio de um arraste: o elemento sob o cursor
+  // sumiria e o tamanho/posicao perdidos
+  if (parAjustando) return;
   root.textContent = "";
   const pins = parOrder(state.pins.filter((id) => sessionById(id)));
   if (!pins.length) {
@@ -2795,14 +3022,23 @@ function renderParalelo() {
     const input = el("input", { placeholder: "Mensagem…" });
     const btn = el("button", { class: "send-btn", title: "Enviar" });
     btn.appendChild(icon("i-send"));
+    const foot = el("div", { class: "p-foot", "data-alvo": sid });
+    mountAnexos(foot, sid); // anexos que ja estavam presos a este cartao
     const go = async () => {
       const texto = input.value.trim();
-      if (!texto) return;
+      const anexos = anexosDe(sid);
+      if (!texto && !anexos.length) return;
       input.value = "";
       try {
-        await api("send_prompt", { session_id: sid, text: texto, delivery: resolveDelivery(sid) });
+        await api("send_prompt", {
+          session_id: sid,
+          text: texto,
+          delivery: resolveDelivery(sid),
+          files: anexos.map((a) => ({ uri: a.uri, name: a.name })),
+        });
         setBusy(sid, true);
-        pushPending(sid, texto, []);
+        pushPending(sid, texto, anexos.map((a) => ({ name: a.name, folder: a.folder, size: a.size })));
+        limparAnexos(sid);
         state.messages[sid] = mergePending(sid, state.messages[sid] || []);
         renderParBody(card, sid);
         paintCardBusy(card, sid);
@@ -2818,7 +3054,8 @@ function renderParalelo() {
         go();
       }
     });
-    card.appendChild(el("div", { class: "p-foot" }, input, btn));
+    foot.append(botaoClipe(sid, "Anexar arquivos neste cartao"), input, btn);
+    card.appendChild(foot);
     grid.appendChild(card);
     makeCardDraggable(card, sid);
 
@@ -2844,7 +3081,9 @@ function renderParBody(card, sid) {
   }
   paintWorking(body, sid);
   body.scrollTop = body.scrollHeight;
-  applyClamps(inner);
+  // a ultima resposta do cartao tambem nao e' recolhida
+  const ultimo = msgs.slice(-40).reverse().find((m) => m.type === "assistant");
+  applyClamps(inner, ultimo ? msgKey(sid, ultimo.id) : null);
 }
 
 /* ============================================================
@@ -4268,6 +4507,7 @@ async function init() {
     }
   }
 
+  await listenDragDrop();
   connectEvents();
   // O diretório padrão do app e' o mesmo do servico (`/api/location`), para
   // que a lista de sessões corresponda a `opencode session list`. Sem isso o

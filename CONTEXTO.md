@@ -276,6 +276,45 @@ a escala de texto vale para o app inteiro de uma vez.
 
 ---
 
+## 7b. Anexos - arquivos e pastas
+
+O usuario anexa arrastando para a janela ou pelo botao de clipe. Um anexo e' um
+`{path, uri, name, folder, size}` e fica no estado ate o envio.
+
+**Os anexos sao por destino.** `state.anexos = { foco: [], cartoes: {} }`:
+`foco` e' o compositor do Foco e `cartoes` indexa pelo sid de cada cartao do
+Paralelo. `anexosDe(alvo)` devolve a lista do destino (alvo nulo = Foco). Soltar
+sobre um cartao anexa nele; fora dos cartoes, vai para o Foco. O alvo e' achado
+por `alvoNoPonto(pos)`, que usa `document.elementFromPoint` com o `position` do
+evento de arraste.
+
+`mountAnexos(wrap, alvo)` monta a faixa **dentro** do composer. Antes ela era
+pendurada no primeiro `.composer` da pagina e sumia no primeiro redesenho, ja
+que o composer e' recriado a cada render.
+
+### O que o servidor aceita (medido no servico 2.0.25)
+
+| entrada | resultado |
+| --- | --- |
+| caminho do Windows cru | 400 *Unsupported attachment URI* |
+| caminho com barras `/` | 400 *Unsupported attachment URI* |
+| `file:///C/Users/...` (sem os dois-pontos) | 400 *Invalid file URI* |
+| `file:///C:/Users/...` | **aceito** |
+| `https://...` | 400 *Unsupported attachment URI* |
+
+O dois-pontos da letra de unidade e' obrigatorio. Espacos viram `%20`.
+
+**Pasta funciona.** O servico responde `application/x-directory` e devolve uma
+listagem do conteudo em base64 - ou seja, anexar uma pasta ja entrega ao modelo
+o que existe dentro dela.
+
+O corpo vai como `files: [{uri, name}]`. A resposta do servico traz tambem
+`data` (base64) e `mime`, que e' como o modelo le o arquivo.
+
+Com `delivery: "queue"` a mensagem **nao vira registro de usuario na hora**,
+fica no inbox com o payload inteiro (inclusive `files`). Para conferir o anexo
+nesse caso, olhe o inbox.
+
 ## 9. Sistema visual
 
 ### Regras que não se negociam
@@ -397,6 +436,21 @@ Adicione o botão em `index.html`, um caso em `renderView`, e guarde o nome em
 ---
 
 ## 12. Armadilhas
+
+- `window.__TAURI_INTERNALS__.invoke` e' **non-writable** e
+  **non-configurable**. Um teste que faz `I.invoke = ...` para desviar do
+  dialogo nativo falha em silencio e a assercao vira mentira - foi assim que
+  tres 'bugs' de anexo eram coisa do harness. Para exercitar o
+  arrastar-e-soltar pelo caminho real, chame o callback em
+  `__TAURI_INTERNALS__.callbacks`: descubra qual e' o do drag-drop disparando
+  `{type:"over"}` e vendo quem poe `body.soltando`. O ouvinte de eventos do
+  servidor estoura `JSON.parse` com esse payload, entao quem lancar
+  SyntaxError nao e' o handler de arraste.
+- Reordenar cartao do Paralelo gravava a ordem **a cada `pointermove`**. Cada
+  quadro recalcula a posicao a partir da ordem ja trocada, entao o cartao faz
+  ping-pong e volta ao lugar quando o numero de quadros e' par. A ordem e' um
+  rascunho durante o arraste e so e' gravada no `pointerup`.
+
 
 > Verifique esta lista antes de mexer em qualquer coisa.
 

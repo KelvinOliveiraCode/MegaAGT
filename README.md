@@ -16,6 +16,14 @@ App desktop (Tauri v2 + Rust) para o **OpenCode CLI v2**: todas as sessões em u
 - **Botão de entrega** no compositor: *automático* (respeita o trabalho em andamento), *agora* (corta a vez do modelo) ou *na fila*.
 - **Aviso de trabalho** no chat e nos cartões do Paralelo, com três pontos animados.
 
+### Anexos
+
+Arraste qualquer arquivo ou pasta para a janela, ou use o clipe no compositor
+(clique abre arquivos, botao direito abre pasta). Pasta funciona: o servidor
+expande o conteudo. No Paralelo, soltar sobre um cartao anexa nele; fora dos
+cartoes, o anexo vai para o Foco. Cada destino tem a sua faixa, com tamanho,
+remocao e "limpar", e o envio leva os arquivos junto com a mensagem.
+
 ### Foco (chat)
 - Mensagens com markdown (títulos, listas aninhadas, tabelas, citações, cercas de código), *reasoning* e ferramentas recolhidos por padrão.
 - Texto longo do assistente é truncado com **"abrir para ler"**; saídas grandes de ferramenta com "ler mais N caracteres".
