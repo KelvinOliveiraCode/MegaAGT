@@ -80,6 +80,7 @@ const state = {
   listLimit: store.get("listLimit", 300),
   markViewed: store.get("markViewed", true),
   fsize: store.get("fsize", 1),
+  delivery: store.get("delivery", "auto"), // auto | steer | queue
   pins: store.get("pins", []),
   selectedId: store.get("selectedId", null),
 
@@ -94,6 +95,10 @@ const state = {
   commands: [],
   projects: [],
   permissions: {}, // sid -> array
+  inbox: {}, // sid -> itens esperando na fila
+  pending: {}, // sid -> recem-enviadas que o servidor ainda nao devolveu
+  parOrder: store.get("parOrder", []),
+  parSize: store.get("parSize", {}),
 
   search: "",
   showSubs: store.get("showSubs", false),
@@ -654,7 +659,7 @@ async function refreshActive() {
     let changed = false;
     for (const sid of running) {
       if (!state.busy[sid]) {
-        state.busy[sid] = true;
+        setBusy(sid, true);
         changed = true;
       }
     }
@@ -695,7 +700,8 @@ async function refreshMessages(sid, { force = false } = {}) {
     const r = await api("list_messages", { session_id: sid });
     // descarta o eco otimista: a mensagem real ja veio do servidor e mostra-la
     // junto com o eco duplica a mensagem do usuário
-    state.messages[sid] = chronological((r?.data || []).filter((m) => !String(m.id || "").startsWith("local-")));
+    const doServidor = (r?.data || []).filter((m) => !String(m.id || "").startsWith("local-"));
+    state.messages[sid] = mergePending(sid, chronological(doServidor));
     return state.messages[sid];
   } catch (e) {
     console.error(e);
@@ -870,13 +876,13 @@ function handleEvent(ev) {
   switch (ev.type) {
     case "session.reasoning.started":
     case "session.text.started": {
-      state.busy[sid] = true;
+      setBusy(sid, true);
       liveMsg(sid, mid);
       patchStream(sid, mid);
       break;
     }
     case "session.reasoning.delta": {
-      state.busy[sid] = true;
+      setBusy(sid, true);
       const lm = liveMsg(sid, mid);
       lm.reasoning.set(ord, (lm.reasoning.get(ord) || "") + (d.delta || ""));
       patchStream(sid, mid);
@@ -890,7 +896,7 @@ function handleEvent(ev) {
       break;
     }
     case "session.text.delta": {
-      state.busy[sid] = true;
+      setBusy(sid, true);
       const lm = liveMsg(sid, mid);
       lm.texts.set(ord, (lm.texts.get(ord) || "") + (d.delta || ""));
       patchStream(sid, mid);
@@ -904,7 +910,7 @@ function handleEvent(ev) {
       break;
     }
     case "session.tool.input.started": {
-      state.busy[sid] = true;
+      setBusy(sid, true);
       const lm = liveMsg(sid, mid);
       lm.tools.set(d.id, { name: d.name, status: "streaming", input: null, output: null });
       patchStream(sid, mid);
@@ -920,7 +926,7 @@ function handleEvent(ev) {
       break;
     }
     case "session.tool.called": {
-      state.busy[sid] = true;
+      setBusy(sid, true);
       const lm = liveMsg(sid, mid);
       const t = lm.tools.get(d.id) || { name: d.name || "tool", status: "running" };
       if (d.name) t.name = d.name;
@@ -952,7 +958,7 @@ function handleEvent(ev) {
       break;
     }
     case "session.step.started": {
-      state.busy[sid] = true;
+      setBusy(sid, true);
       patchStream(sid, mid);
       break;
     }
@@ -974,7 +980,7 @@ function handleEvent(ev) {
       // a sessão terminou: o overlay live e' invalido por definicao
       clearLive(sid);
       delete refetchTries[sid];
-      state.busy[sid] = false;
+      setBusy(sid, false);
       scheduleRefetch(sid);
       queueSessionRefresh();
       markViewed(sid, d.idle);
@@ -983,7 +989,7 @@ function handleEvent(ev) {
     case "session.error": {
       clearLive(sid);
       delete refetchTries[sid];
-      state.busy[sid] = false;
+      setBusy(sid, false);
       scheduleRefetch(sid);
       queueSessionRefresh();
       if (sid === state.selectedId) toast(errorText(d.error, "erro na sessão"), "err");
@@ -1400,6 +1406,7 @@ function renderSessionHeader() {
       el("button", { class: "btn", onclick: (e) => openAgentPicker(e.currentTarget, s), title: "Trocar agente" },
         el("span", { class: "nowrap", text: s.agent || "padrão" })),
       // todas as ações ficam no menu, para nao repetir botoes na tela
+      contextCircle(s.id),
       el("button", { class: "icon-btn", onclick: (e) => openSessionMenu(e.currentTarget, s), title: "Ações da sessão" }, icon("i-more"))
     ),
     el("div", { class: "f-row" },
@@ -1421,6 +1428,272 @@ async function act(cmd, args, okMsg) {
   } catch (e) {
     fail(e);
   }
+}
+
+/* ---------- mensagens recem-enviadas ---------- */
+/**
+ * O eco otimista e' descartado por `refreshMessages` assim que a lista vem do
+ * servidor. Se o servidor ainda nao tem a mensagem, ela some da tela — no
+ * Paralelo isso acontecia a cada evento. Aqui ela fica guardada e volta a ser
+ * desenhada ate chegar a copia de verdade.
+ */
+function pushPending(sid, text, files) {
+  (state.pending[sid] ||= []).push({ text, files: files || [], created: Date.now() });
+}
+
+/** Some da fila de pendencia assim que o servidor devolve a mesma mensagem. */
+function mergePending(sid, lista) {
+  const pend = state.pending[sid];
+  if (!pend || !pend.length) return lista;
+  const restam = pend.filter(
+    (p) =>
+      !lista.some(
+        (m) =>
+          m.type === "user" &&
+          (m.text || "") === p.text &&
+          (m.time?.created || 0) >= p.created - 4000
+      )
+  );
+  state.pending[sid] = restam;
+  if (!restam.length) return lista;
+  const eco = restam.map((p) => ({
+    id: "local-" + p.created,
+    type: "user",
+    text: p.text,
+    files: p.files,
+    time: { created: p.created },
+  }));
+  return chronological([...lista, ...eco]);
+}
+
+/* ---------- indicador de trabalho ---------- */
+/**
+ * `session.idle` e `session.error` limpavam o estado de ocupado sem redesenhar
+ * a view: o aviso aparecia e sumia no ritmo errado. Toda mudanca passa por
+ * aqui e redesenha o que depende dela.
+ */
+function setBusy(sid, valor) {
+  if (!!state.busy[sid] === !!valor) return;
+  state.busy[sid] = valor;
+  const dot = document.querySelector('.s-item[data-sid="' + sid + '"] .s-dot');
+  if (dot) {
+    const s = sessionById(sid);
+    dot.className = "s-dot " + (s ? sessionState(s) : valor ? "running" : "idle");
+  }
+  const card = document.querySelector('.p-card[data-sid="' + sid + '"]');
+  if (card) paintCardBusy(card, sid);
+  if (sid === state.selectedId) {
+    renderSessionHeader();
+    if (state.view === "foco") renderComposer();
+  }
+}
+
+/** Faixa animada no corpo da conversa: "o modelo esta trabalhando". */
+function paintWorking(node, sid) {
+  if (!node) return;
+  node.querySelector(".working")?.remove();
+  if (!isBusy(sid)) return;
+  const s = sessionById(sid);
+  node.appendChild(
+    el("div", { class: "working" },
+      el("span", { class: "working-dots" }, el("i"), el("i"), el("i")),
+      el("span", { class: "working-txt", text: (s && s.agent ? s.agent : "") + " trabalhando" })
+    )
+  );
+}
+
+/** Marca o card do Paralelo como ocupado e liga/desliga o botao de parar. */
+function paintCardBusy(card, sid) {
+  const busy = isBusy(sid);
+  card.classList.toggle("busy", busy);
+  paintWorking($(".p-body", card), sid);
+  const stop = $(".p-stop", card);
+  if (stop) stop.style.display = busy ? "" : "none";
+}
+
+/* ---------------- contexto e fila ---------------- */
+/**
+ * Tokens realmente occupados na janela, e o limite do modelo.
+ *
+ * O `tokens` da sessao e' ACUMULADO (soma de todas as voltas) e serve para
+ * custo. O que ocupa a janela e' o prompt da ultima volta:
+ * `input + cache.read + reasoning` da mensagem do assistente mais recente.
+ */
+function contextUsage(sid) {
+  const s = sessionById(sid);
+  const msgs = state.messages[sid] || [];
+  let usado = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const tk = msgs[i].tokens;
+    if (tk && (tk.input || tk.cache?.read || tk.reasoning)) {
+      usado = (tk.input || 0) + (tk.cache?.read || 0) + (tk.reasoning || 0);
+      break;
+    }
+  }
+  const m = state.models.find((x) => modelBaseKey(x) === modelBaseKey(s?.model));
+  const limite = m?.limit?.context || 0;
+  const pct = limite ? Math.min(100, Math.round((usado / limite) * 100)) : 0;
+  return { usado, limite, pct, restante: Math.max(0, limite - usado), semLimite: !limite };
+}
+
+function contextColor(pct) {
+  if (pct >= 90) return "var(--err)";
+  if (pct >= 70) return "var(--warn)";
+  return "var(--ok)";
+}
+
+/** Circulo de contexto com a porcentagem no meio. */
+function contextCircle(sid, opts) {
+  const pequeno = opts && opts.pequeno;
+  const c = contextUsage(sid);
+  const R = pequeno ? 8 : 11;
+  const C = 2 * Math.PI * R;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 28 28");
+  svg.setAttribute("class", "ctx-ring" + (pequeno ? " sm" : ""));
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", c.semLimite ? "contexto: " + fmtNum(c.usado) + " tokens" : "contexto: " + c.pct + "% de " + fmtNum(c.limite));
+  const mk = (cls, extra) => {
+    const ci = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    ci.setAttribute("cx", "14");
+    ci.setAttribute("cy", "14");
+    ci.setAttribute("r", String(R));
+    ci.setAttribute("class", cls);
+    for (const k of Object.keys(extra || {})) ci.setAttribute(k, extra[k]);
+    return ci;
+  };
+  svg.appendChild(mk("trk"));
+  svg.appendChild(mk("val", {
+    "stroke-dasharray": C.toFixed(2),
+    "stroke-dashoffset": (C * (1 - c.pct / 100)).toFixed(2),
+    stroke: contextColor(c.pct),
+  }));
+  const box = el("button", {
+    class: "ctx",
+    type: "button",
+    title: "Contexto: " + c.pct + "% usado",
+    // o rotulo fica no botao (e' o que recebe foco), nao no svg interno
+    "aria-label": c.semLimite ? "contexto: " + fmtNum(c.usado) + " tokens" : "contexto: " + c.pct + "% de " + fmtNum(c.limite) + " tokens",
+  });
+  box.appendChild(svg);
+  box.appendChild(el("span", { class: "ctx-n", text: c.semLimite ? "–" : c.pct + "%" }));
+  box.onclick = (e) => openContextPopover(e.currentTarget, sid);
+  return box;
+}
+
+/** Detalhe do contexto, com atalho para compactar. */
+function openContextPopover(anchor, sid) {
+  openPopover(anchor, (pop, close) => {
+    const c = contextUsage(sid);
+    pop.appendChild(el("div", { class: "pop-head" }, el("div", { class: "t", text: "janela de contexto" })));
+    pop.appendChild(el("div", { class: "ctx-bar" },
+      el("div", { class: "ctx-fill", style: "width:" + c.pct + "%;background:" + contextColor(c.pct) })));
+    const linha = (k, v) => el("div", { class: "ctx-line" }, el("span", { text: k }), el("b", { text: v }));
+    const box = el("div", { class: "ctx-lines" });
+    box.appendChild(linha("usado", fmtNum(c.usado) + " tokens"));
+    box.appendChild(linha("restante", c.semLimite ? "—" : fmtNum(c.restante) + " tokens"));
+    box.appendChild(linha("limite", c.semLimite ? "modelo sem limite informado" : fmtNum(c.limite) + " tokens"));
+    pop.appendChild(box);
+    if (c.limite && c.pct >= 70) {
+      pop.appendChild(el("div", { class: "pop-hint", text: c.pct >= 90 ? "Janela quase cheia — compactar evita corte." : "Janela comecou a encher." }));
+    }
+    const b = el("button", { class: "pop-item", type: "button" }, icon("i-compact"), el("span", { class: "t", text: "Compactar agora" }));
+    b.onclick = async () => {
+      close();
+      try {
+        await api("compact_session", { session_id: sid });
+        toast("Compactação enfileirada", "ok");
+        await refreshSessions();
+        if (sid === state.selectedId) {
+          await refreshMessages(sid, { force: true });
+          renderMessages();
+          renderSessionHeader();
+        }
+      } catch (e) {
+        fail(e);
+      }
+    };
+    pop.appendChild(b);
+  }, { width: 260, align: "end" });
+}
+
+/* ---------- fila ---------- */
+async function refreshInbox(sid) {
+  if (!sid) return;
+  try {
+    const r = await api("list_inbox", { session_id: sid });
+    state.inbox[sid] = r?.data || [];
+  } catch {
+    state.inbox[sid] = [];
+  }
+  renderInbox(sid);
+}
+
+/**
+ * Faixa com o que esta esperando. Cada item pode ser cancelado (some da fila)
+ * ou promovido a steer (entra antes da vez do modelo).
+ */
+function renderInbox(sid) {
+  const atual = document.getElementById("inboxStrip");
+  const fila = state.inbox[sid] || [];
+  if (!fila.length) {
+    atual?.remove();
+    return;
+  }
+  const strip = atual || el("div", { class: "inbox-strip", id: "inboxStrip" });
+  if (atual) strip.textContent = "";
+  strip.appendChild(el("span", { class: "inbox-title", text: fila.length === 1 ? "1 na fila" : fila.length + " na fila" }));
+  for (const item of fila) {
+    const texto = item.payload?.text || "";
+    const steer = item.delivery === "steer";
+    const linha = el("div", { class: "inbox-row" + (steer ? " steer" : "") });
+    linha.appendChild(el("span", { class: "inbox-badge", text: steer ? "indo agora" : "na fila" }));
+    linha.appendChild(el("span", { class: "inbox-text", text: texto, title: texto }));
+    if (!steer) {
+      const st = el("button", { class: "btn sm", type: "button", title: "Mandar agora, antes da vez do modelo" }, el("span", { text: "Steer" }));
+      st.onclick = async () => {
+        st.disabled = true;
+        try {
+          await api("steer_inbox", { session_id: sid, inbox_id: item.id });
+          await refreshInbox(sid);
+          toast("Mensagem promovida", "ok");
+        } catch (e) {
+          fail(e);
+          st.disabled = false;
+        }
+      };
+      const cx = el("button", { class: "btn sm danger", type: "button", title: "Cancelar mensagem da fila" }, el("span", { text: "Cancelar" }));
+      cx.onclick = async () => {
+        cx.disabled = true;
+        try {
+          await api("cancel_inbox", { session_id: sid, inbox_id: item.id });
+          await refreshInbox(sid);
+          toast("Mensagem cancelada", "ok");
+        } catch (e) {
+          fail(e);
+          cx.disabled = false;
+        }
+      };
+      linha.append(st, cx);
+    }
+    strip.appendChild(linha);
+  }
+  if (!atual) $(".composer")?.before(strip);
+}
+
+/* ---------- agentes ---------- */
+/**
+ * Primarias (Build, Plan, jev...) primeiro, subagentes depois, alfabetico
+ * dentro do grupo. A API traz `mode: "primary" | "subagent"`; sem ordenar,
+ * os 271 subagentes empurravam as primarias para o fim da lista.
+ */
+function orderAgents(lista) {
+  return [...lista].sort((a, b) => {
+    const pa = a.mode === "primary" ? 0 : 1;
+    const pb = b.mode === "primary" ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    return String(a.name || "").localeCompare(String(b.name || ""), "pt-BR");
+  });
 }
 
 /* ---------- permissoes ---------- */
@@ -1484,6 +1757,7 @@ async function replyPerm(sid, p, decision) {
    ============================================================ */
 function renderMessages() {
   const scroll = $("#msgScroll");
+  if (!scroll) return;
   if (!scroll) return;
   const sid = state.selectedId;
   const msgs = state.messages[sid] || [];
@@ -2157,6 +2431,19 @@ function applyClamps(root) {
   }
 }
 
+/* ---------- entrega da mensagem ---------- */
+/**
+ * Como entregar quando o modelo ja esta ocupado.
+ * `auto` respeita o trabalho em andamento (vai para a fila); `steer` corta a
+ * vez do modelo; `queue` sempre espera.
+ */
+function resolveDelivery(sid) {
+  if (state.delivery === "steer" || state.delivery === "queue") return state.delivery;
+  return isBusy(sid) ? "queue" : "steer";
+}
+
+const DELIVERY_NOMES = { auto: "automático", steer: "agora", queue: "na fila" };
+
 /* ============================================================
    Compositor
    ============================================================ */
@@ -2167,7 +2454,25 @@ function buildComposer(s) {
   const ta = el("textarea", { rows: "1", placeholder: "Mensagem para a sessão...", spellcheck: "false" });
   const send = el("button", { class: "send-btn", title: "Enviar (Enter)" });
   send.appendChild(icon("i-send"));
-  box.append(ta, send);
+  // botao de entrega: agora (corta a vez do modelo) ou na fila (espera)
+  const entrega = el("button", { class: "deliv", type: "button", title: "Como entregar a mensagem" });
+  box.append(entrega, ta, send);
+  const paintEntrega = () => {
+    entrega.textContent = "";
+    entrega.className = "deliv " + state.delivery;
+    entrega.append(
+      icon(state.delivery === "queue" ? "i-list" : state.delivery === "steer" ? "i-bolt" : "i-chev", "caret"),
+      el("span", { text: DELIVERY_NOMES[state.delivery] || "automático" })
+    );
+  };
+  paintEntrega();
+  entrega.onclick = (e) => {
+    e.stopPropagation();
+    const ordem = ["auto", "steer", "queue"];
+    state.delivery = ordem[(ordem.indexOf(state.delivery) + 1) % ordem.length];
+    store.set("delivery", state.delivery);
+    paintEntrega();
+  };
   inner.appendChild(box);
 
   const hint = el("div", { class: "composer-hint" });
@@ -2229,17 +2534,14 @@ function buildComposer(s) {
       if (known) {
         await api("run_command", { session_id: s.id, name: cmdMatch[1], text: cmdMatch[2] });
       } else {
-        await api("send_prompt", { session_id: s.id, text });
+        await api("send_prompt", { session_id: s.id, text, delivery: resolveDelivery(s.id) });
       }
-      state.busy[s.id] = true;
+      setBusy(s.id, true);
       renderSessionHeader();
-      // eco otimista da mensagem enviada (o servidor devolve a versão real no
-      // proximo refetch; ate la este evita a sensacao de "nao enviou")
-      const list = state.messages[s.id] || [];
-      state.messages[s.id] = chronological([
-        ...list,
-        { id: "local-" + Date.now(), type: "user", text, time: { created: Date.now() }, files: [] },
-      ]);
+      // eco otimista: fica guardado como pendencia ate o servidor devolver a
+      // mensagem de verdade, senao ela some da tela no proximo refetch
+      pushPending(s.id, text, []);
+      state.messages[s.id] = mergePending(s.id, state.messages[s.id] || []);
       renderMessages();
       queueSessionRefresh();
       setTimeout(refreshPermissions, 600, s.id);
@@ -2299,15 +2601,149 @@ function buildComposer(s) {
 /* ============================================================
    Visao Paralelo
    ============================================================ */
+/* ---------------- janelas em paralelo ---------------- */
+const PAR_MIN_W = 300;
+const PAR_MIN_H = 260;
+const PAR_MAX_W = 1100;
+const PAR_MAX_H = 1000;
+
+function clampNum(v, min, max) {
+  return Math.max(min, Math.min(max, Number(v) || min));
+}
+
+/** Ordem das janelas: a que o usuario arrumou, depois as novas. */
+function parOrder(pins) {
+  const guardado = (state.parOrder || []).filter((id) => pins.includes(id));
+  const novas = pins.filter((id) => !guardado.includes(id));
+  return [...guardado, ...novas];
+}
+
+function parSize(sid) {
+  const s = state.parSize[sid] || {};
+  return { w: clampNum(s.w ?? 420, PAR_MIN_W, PAR_MAX_W), h: clampNum(s.h ?? 460, PAR_MIN_H, PAR_MAX_H) };
+}
+
+/** Cabecalho arrasta para reordenar; canto redimensiona. */
+function makeCardDraggable(card, sid) {
+  const head = card.querySelector(".p-head");
+  if (head) {
+    head.style.cursor = "grab";
+    head.addEventListener("pointerdown", (ev) => {
+      if (ev.target.closest("button")) return;
+      const ini = { x: ev.clientX, y: ev.clientY };
+      let arrastando = false;
+      const mover = (e) => {
+        const dx = e.clientX - ini.x;
+        const dy = e.clientY - ini.y;
+        if (!arrastando && Math.hypot(dx, dy) < 6) return;
+        if (!arrastando) {
+          arrastando = true;
+          card.classList.add("dragging");
+          head.style.cursor = "grabbing";
+        }
+        card.style.transform = "translate(" + dx + "px," + dy + "px)";
+        card.style.zIndex = "30";
+        const r = card.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        let melhor = null;
+        let melhorD = Infinity;
+        for (const c of document.querySelectorAll(".p-card")) {
+          if (c === card) continue;
+          const cr = c.getBoundingClientRect();
+          const d = Math.hypot(cx - (cr.left + cr.width / 2), cy - (cr.top + cr.height / 2));
+          if (d < melhorD) {
+            melhorD = d;
+            melhor = c;
+          }
+        }
+        if (melhor) {
+          const ids = parOrder(state.pins.filter((x) => sessionById(x)));
+          const de = ids.indexOf(sid);
+          const para = ids.indexOf(melhor.dataset.sid);
+          if (de > -1 && para > -1 && de !== para) {
+            ids.splice(para, 0, ids.splice(de, 1)[0]);
+            state.parOrder = ids;
+            store.set("parOrder", ids);
+          }
+        }
+      };
+      const soltar = () => {
+        document.removeEventListener("pointermove", mover);
+        document.removeEventListener("pointerup", soltar);
+        card.classList.remove("dragging");
+        card.style.transform = "";
+        card.style.zIndex = "";
+        head.style.cursor = "grab";
+        if (arrastando) renderParalelo();
+      };
+      document.addEventListener("pointermove", mover);
+      document.addEventListener("pointerup", soltar);
+    });
+  }
+
+  const alca = el("div", { class: "p-resize", title: "Redimensionar" });
+  alca.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const r = card.getBoundingClientRect();
+    const ini = { x: ev.clientX, y: ev.clientY, w: r.width, h: r.height };
+    card.classList.add("resizing");
+    const mover = (e) => {
+      card.style.width = clampNum(ini.w + (e.clientX - ini.x), PAR_MIN_W, PAR_MAX_W) + "px";
+      card.style.height = clampNum(ini.h + (e.clientY - ini.y), PAR_MIN_H, PAR_MAX_H) + "px";
+    };
+    const soltar = () => {
+      document.removeEventListener("pointermove", mover);
+      document.removeEventListener("pointerup", soltar);
+      card.classList.remove("resizing");
+      state.parSize[sid] = {
+        w: Math.round(clampNum(parseFloat(card.style.width) || ini.w, PAR_MIN_W, PAR_MAX_W)),
+        h: Math.round(clampNum(parseFloat(card.style.height) || ini.h, PAR_MIN_H, PAR_MAX_H)),
+      };
+      store.set("parSize", state.parSize);
+    };
+    document.addEventListener("pointermove", mover);
+    document.addEventListener("pointerup", soltar);
+  });
+  card.appendChild(alca);
+}
+
+/** Botao de parar, igual ao da vista Foco. */
+function makeStopButton(sid) {
+  const b = el("button", { class: "icon-btn p-stop", type: "button", title: "Interromper" }, icon("i-stop"));
+  b.style.display = isBusy(sid) ? "" : "none";
+  b.onclick = (e) => {
+    e.stopPropagation();
+    b.disabled = true;
+    api("interrupt_session", { session_id: sid })
+      .then(() => {
+        setBusy(sid, false);
+        toast("Interrompido", "ok");
+      })
+      .catch(fail)
+      .finally(() => (b.disabled = false));
+  };
+  return b;
+}
+
+/** Nome curto do modelo, para caber no card do Paralelo. */
+function shortModelTag(s) {
+  const n = modelName(s?.model);
+  return n ? n.slice(0, 22) : "—";
+}
+
 function renderParalelo() {
   const root = $("#viewRoot");
+  if (!root) return;
   root.textContent = "";
-  const pins = state.pins.filter((id) => sessionById(id));
+  const pins = parOrder(state.pins.filter((id) => sessionById(id)));
   if (!pins.length) {
     root.appendChild(
       el("div", { class: "empty" },
         el("h3", { text: "Nenhuma sessão fixada" }),
-        el("p", { text: "Use o botao de fixar em uma sessão da barra lateral para acompanhar varias conversas ao mesmo tempo, todas em streaming ao vivo." })
+        el("p", { text: "Use o botao de fixar em uma sessão da barra lateral para acompanhar varias conversas ao mesmo tempo, todas em streaming ao vivo." }),
+        el("p", { class: "dim", text: "Arraste o cabecalho para mudar a ordem e o canto inferior direito para redimensionar." })
       )
     );
     return;
@@ -2316,9 +2752,11 @@ function renderParalelo() {
   for (const sid of pins) {
     const s = sessionById(sid);
     if (!s) continue;
-    const busy = isBusy(sid);
-    const card = el("div", { class: "p-card" + (busy ? " busy" : "") });
+    const card = el("div", { class: "p-card" + (isBusy(sid) ? " busy" : "") });
     card.dataset.sid = sid;
+    const tam = parSize(sid);
+    card.style.width = tam.w + "px";
+    card.style.height = tam.h + "px";
 
     const title = el("div", { class: "t", text: s.title || s.id, title: s.title || s.id });
     title.onclick = () => {
@@ -2328,13 +2766,25 @@ function renderParalelo() {
 
     const pinBtn = el("button", { class: "icon-btn on", title: "Desafixar" });
     pinBtn.appendChild(icon("i-pin"));
-    pinBtn.onclick = () => togglePin(sid);
+    pinBtn.onclick = (e) => {
+      e.stopPropagation();
+      togglePin(sid);
+    };
+
+    const modelBtn = el("button", { class: "p-model", type: "button", title: "Trocar modelo" },
+      el("span", { class: "nowrap", text: shortModelTag(s) || "padrão" }));
+    modelBtn.onclick = (e) => {
+      e.stopPropagation();
+      openModelPicker(modelBtn, s);
+    };
 
     card.appendChild(
       el("div", { class: "p-head" },
         el("span", { class: "s-dot " + sessionState(s) }),
         title,
-        el("span", { class: "tag", text: shortModelTag(s) }),
+        modelBtn,
+        contextCircle(sid, { pequeno: true }),
+        makeStopButton(sid),
         pinBtn
       )
     );
@@ -2346,17 +2796,16 @@ function renderParalelo() {
     const btn = el("button", { class: "send-btn", title: "Enviar" });
     btn.appendChild(icon("i-send"));
     const go = async () => {
-      const text = input.value.trim();
-      if (!text) return;
+      const texto = input.value.trim();
+      if (!texto) return;
       input.value = "";
       try {
-        await api("send_prompt", { session_id: sid, text });
-        state.busy[sid] = true;
-        state.messages[sid] = chronological([
-          ...(state.messages[sid] || []),
-          { id: "local-" + Date.now(), type: "user", text, time: { created: Date.now() }, files: [] },
-        ]);
+        await api("send_prompt", { session_id: sid, text: texto, delivery: resolveDelivery(sid) });
+        setBusy(sid, true);
+        pushPending(sid, texto, []);
+        state.messages[sid] = mergePending(sid, state.messages[sid] || []);
         renderParBody(card, sid);
+        paintCardBusy(card, sid);
         queueSessionRefresh();
       } catch (e) {
         fail(e);
@@ -2371,15 +2820,14 @@ function renderParalelo() {
     });
     card.appendChild(el("div", { class: "p-foot" }, input, btn));
     grid.appendChild(card);
+    makeCardDraggable(card, sid);
 
-    refreshMessages(sid).then(() => renderParBody(card, sid));
+    refreshMessages(sid).then(() => {
+      renderParBody(card, sid);
+      paintCardBusy(card, sid);
+    });
   }
   root.appendChild(grid);
-}
-
-function shortModelTag(s) {
-  const n = modelName(s.model);
-  return n ? n.slice(0, 22) : "—";
 }
 
 function renderParBody(card, sid) {
@@ -2394,6 +2842,7 @@ function renderParBody(card, sid) {
       inner.appendChild(messageNode(sid, { id: mid, type: "assistant", content: [], time: { created: Date.now() } }, live));
     }
   }
+  paintWorking(body, sid);
   body.scrollTop = body.scrollHeight;
   applyClamps(inner);
 }
@@ -2403,6 +2852,7 @@ function renderParBody(card, sid) {
    ============================================================ */
 function renderSubagentes() {
   const root = $("#viewRoot");
+  if (!root) return;
   root.textContent = "";
   const wrap = el("div", { class: "s-view" });
   root.appendChild(wrap); // anexado antes de qualquer retorno antecipado
@@ -2569,6 +3019,7 @@ async function loadSubPreview(box, sid) {
    ============================================================ */
 function renderEventos() {
   const root = $("#viewRoot");
+  if (!root) return;
   root.textContent = "";
   const view = el("div", { class: "e-view" });
 
@@ -2612,7 +3063,8 @@ function evClass(t) {
 
 function updateEventStatus() {
   const s = state.stream;
-  $("#evCount").textContent = state.events.length || "";
+  const contador = $("#evCount");
+  if (contador) contador.textContent = state.events.length || "";
   const box = $("#evStatus");
   if (!box) return;
 
@@ -2890,8 +3342,14 @@ function openAgentPicker(anchor, s) {
   openPopover(anchor, (pop, close) => {
     const list = el("div", { class: "pop-list" });
     pop.append(el("div", { class: "pop-head" }, el("div", { class: "t", text: "agente" })), list);
-    const agents = [...state.agents].filter((a) => !a.hidden);
+    const agents = orderAgents(state.agents.filter((a) => !a.hidden));
+    let grupoAtual = null;
     for (const a of agents) {
+      const grupo = a.mode === "primary" ? "primárias" : "subagentes";
+      if (grupo !== grupoAtual) {
+        grupoAtual = grupo;
+        list.appendChild(el("div", { class: "mp-section", text: grupo }));
+      }
       const row = el("button", { class: "pop-item" + (a.id === s.agent ? " on" : ""), type: "button" },
         el("span", { class: "t", text: agentLabel(a) }),
         el("span", { class: "k", text: a.mode || "" })
@@ -3835,6 +4293,7 @@ async function init() {
     }
   }
   updateDirLabel();
+  if (state.selectedId) refreshInbox(state.selectedId);
   await Promise.all([checkConnection(), refreshMeta(), refreshProjects()]);
   await refreshSessions();
   await refreshActive();
@@ -3856,7 +4315,10 @@ async function init() {
     if (document.hidden) return;
     await refreshActive();
     await refreshSessions();
-    if (state.selectedId && isBusy(state.selectedId)) refreshPermissions(state.selectedId);
+    if (state.selectedId) {
+      if (isBusy(state.selectedId)) refreshPermissions(state.selectedId);
+      refreshInbox(state.selectedId);
+    }
     if (state.view === "eventos") updateEventStatus();
   }, 7000);
 }
