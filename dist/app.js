@@ -46,9 +46,10 @@ const ACCENTS = [
   ["violet", "#8b5cd6"],
 ];
 
-const CLAMP_PX = 340; // altura acima da qual o texto do assistente e' recolhido
-const OUT_CHARS = 1600; // limite de exibicao de saída de ferramenta
-
+/** Altura acima da qual o texto do assistente e' recolhido. 0 = nunca. */
+const clampPx = () => state.clampPx;
+/** Limite de exibicao de saida de ferramenta. 0 = sem limite. */
+const outChars = () => state.outChars;
 /* ---------------- persistencia ---------------- */
 const store = {
   get(k, d) {
@@ -73,6 +74,12 @@ const state = {
   accent: store.get("accent", null),
   think: store.get("think", true),
   directory: store.get("directory", null),
+  autostart: store.get("autostart", true),
+  clampPx: store.get("clampPx", 340),
+  outChars: store.get("outChars", 1600),
+  listLimit: store.get("listLimit", 300),
+  markViewed: store.get("markViewed", true),
+  fsize: store.get("fsize", 1),
   pins: store.get("pins", []),
   selectedId: store.get("selectedId", null),
 
@@ -91,7 +98,6 @@ const state = {
   search: "",
   showSubs: store.get("showSubs", false),
   sidebarCollapsed: store.get("sidebarCollapsed", false),
-  listLimit: 300,
   selectMode: false,
   selected: new Set(),
   expanded: {}, // chave -> bool (partes abertas)
@@ -1002,7 +1008,7 @@ function parseMaybe(text) {
 
 function markViewed(sid, idle) {
   if (!idle) return;
-  api("mark_viewed", { session_id: sid, idle }).catch(() => {});
+  if (state.markViewed) api("mark_viewed", { session_id: sid, idle }).catch(() => {});
 }
 
 /** Chave segura para seletores: ids sao [A-Za-z0-9_-], "|" so' dentro de string. */
@@ -1910,6 +1916,8 @@ const TOOL_STYLE = {
   list: { ic: "i-list", lbl: "listar", kind: "raw" },
   webfetch: { ic: "i-globe", lbl: "baixar", kind: "raw" },
   task: { ic: "i-cpu", lbl: "subagente", kind: "raw" },
+  skill: { ic: "i-brain", lbl: "skill", kind: "raw" },
+  command: { ic: "i-bolt", lbl: "comando", kind: "shell" },
 };
 
 const baseName = (p) => String(p || "").split(/[\\/]/).pop() || String(p || "");
@@ -1944,6 +1952,12 @@ function toolSubject(name, st) {
   if (inp.pattern) return String(inp.pattern);
   if (inp.url) return String(inp.url);
   if (inp.description) return String(inp.description);
+  // ultimo recurso: o primeiro valor de texto da entrada
+  if (inp && typeof inp === "object") {
+    for (const v of Object.values(inp)) {
+      if (typeof v === "string" && v.trim()) return trimMid(v.replace(/\s+/g, " ").trim(), 80);
+    }
+  }
   return "";
 }
 
@@ -2106,7 +2120,7 @@ function stringify(v) {
   }
 }
 
-function preWithLimit(text, limit = OUT_CHARS) {
+function preWithLimit(text, limit = outChars()) {
   if (text.length <= limit) return el("pre", { text });
   const wrap = el("div", { style: "position:relative" });
   const pre = el("pre", { text: text.slice(0, limit) + "\n…" });
@@ -2123,10 +2137,10 @@ function preWithLimit(text, limit = OUT_CHARS) {
 function applyClamps(root) {
   for (const node of $$(".prose", root)) {
     if (node.closest(".clamp")) continue;
-    if (node.scrollHeight <= CLAMP_PX) continue;
+    if (clampPx() <= 0 || node.scrollHeight <= clampPx()) continue;
     // wrapper externo (estado) + interno (corte). O degradado fica no
     // padding do interno, entao nunca cobre a ultima linha de texto.
-    const holder = el("div", { class: "clamp", style: "--clamp-h:" + CLAMP_PX + "px" });
+    const holder = el("div", { class: "clamp", style: "--clamp-h:" + clampPx() + "px" });
     const inner = el("div", { class: "clamp-inner" });
     node.replaceWith(holder);
     holder.appendChild(inner);
@@ -3077,63 +3091,245 @@ function openSessionMenu(anchor, s) {
   }, { width: 260, align: "end" });
 }
 
-function openSettings(anchor) {
-  openPopover(anchor, (pop, close) => {
-    pop.appendChild(el("div", { class: "pop-head" }, el("div", { class: "t", text: "aparencia" })));
+/* ---------------- painel de ajustes ---------------- */
+/** Linha com um interruptor. */
+function setSwitch(label, valor, onTroca, dica) {
+  const row = el("div", { class: "set-row" },
+    el("div", { class: "grow" }, el("span", { class: "lbl", text: label }), dica ? el("span", { class: "hint", text: dica }) : null),
+    el("button", { class: "switch" + (valor ? " on" : ""), type: "button", role: "switch", "aria-checked": String(!!valor), "aria-label": label })
+  );
+  $(".switch", row).onclick = (e) => {
+    const v = !e.currentTarget.classList.contains("on");
+    e.currentTarget.classList.toggle("on", v);
+    e.currentTarget.setAttribute("aria-checked", String(v));
+    onTroca(v);
+  };
+  return row;
+}
 
-    const themeRow = el("div", { class: "set-row" }, el("span", { class: "lbl", text: "Tema" }));
-    const sel = el("select", { class: "input", style: "width:auto" });
-    for (const [id, name] of THEMES) sel.appendChild(el("option", { value: id, text: name, selected: id === state.theme }));
-    sel.onchange = () => {
-      state.theme = sel.value;
-      store.set("theme", state.theme);
-      applyTheme();
-    };
-    themeRow.appendChild(sel);
-    pop.appendChild(themeRow);
+/** Linha com um <select>. */
+function setSelect(label, valor, opcoes, onTroca, dica) {
+  const sel = el("select", { class: "input" });
+  for (const [v, nome] of opcoes) sel.appendChild(el("option", { value: String(v), text: nome, selected: String(v) === String(valor) }));
+  sel.onchange = () => onTroca(sel.value);
+  const row = el("div", { class: "set-row" },
+    el("div", { class: "grow" }, el("span", { class: "lbl", text: label }), dica ? el("span", { class: "hint", text: dica }) : null),
+    sel
+  );
+  return row;
+}
 
-    const accRow = el("div", { class: "set-row" }, el("span", { class: "lbl", text: "Destaque" }));
-    const sws = el("div", { class: "swatches" });
-    for (const [id, color] of ACCENTS) {
-      const b = el("button", { class: "swatch" + (state.accent === id ? " on" : ""), title: id });
-      b.style.background = color;
-      b.onclick = () => {
-        state.accent = state.accent === id ? null : id;
-        store.set("accent", state.accent);
-        applyTheme();
-        close();
-        openSettings(anchor);
-      };
-      sws.appendChild(b);
+/** Botao de acao dentro do painel. */
+function setAction(nome, icone, onClick, perigo) {
+  const b = el("button", { class: "btn" + (perigo ? " danger" : ""), type: "button" }, icone ? icon(icone) : null, el("span", { text: nome }));
+  b.onclick = onClick;
+  return b;
+}
+
+function openSettings() {
+  // diagnostico e' assincrono: o painel abre mostrando "verificando..."
+  const nota = el("div", { class: "set-note" }, el("span", { text: "verificando o serviço…" }));
+  const acoes = el("div", { class: "set-acts" });
+
+  const body = el("div", { class: "set-col" });
+
+  /* --- servico --- */
+  const gServ = el("div", { class: "set-group" }, el("div", { class: "set-sec", text: "serviço do opencode" }));
+  gServ.appendChild(nota);
+  gServ.appendChild(
+    setSwitch("Iniciar o serviço ao abrir o app", state.autostart, (v) => {
+      state.autostart = v;
+      store.set("autostart", v);
+    }, "o app sobe o OpenCode em segundo plano, sem janela de console")
+  );
+  body.appendChild(gServ);
+
+  const conectar = setAction("Conectar agora", "i-plug", async () => {
+    conectar.disabled = true;
+    nota.textContent = "conectando…";
+    try {
+      await api("ensure_service");
+      await refreshAll();
+      await mostrarDiagnostico();
+      toast("Serviço conectado", "ok");
+    } catch (e) {
+      fail(e);
+      await mostrarDiagnostico();
+    } finally {
+      conectar.disabled = false;
     }
-    accRow.appendChild(sws);
-    pop.appendChild(accRow);
+  });
+  const reiniciar = setAction("Reiniciar serviço", "i-refresh", async () => {
+    reiniciar.disabled = true;
+    nota.textContent = "reiniciando…";
+    try {
+      await api("restart_service");
+      await refreshAll();
+      await mostrarDiagnostico();
+      toast("Serviço reiniciado", "ok");
+    } catch (e) {
+      fail(e);
+      await mostrarDiagnostico();
+    } finally {
+      reiniciar.disabled = false;
+    }
+  });
+  const parar = setAction("Parar serviço", "i-stop", async () => {
+    parar.disabled = true;
+    try {
+      await api("stop_service");
+      state.autostart = false;
+      store.set("autostart", false);
+      toast("Serviço parado. Ligue o início automático para voltar.", "ok");
+      await mostrarDiagnostico();
+    } catch (e) {
+      fail(e);
+    } finally {
+      parar.disabled = false;
+    }
+  });
+  acoes.append(conectar, reiniciar, parar);
+  gServ.appendChild(acoes);
 
-    const thinkRow = el("div", { class: "set-row" },
-      el("span", { class: "lbl", text: "Mostrar raciocínio" }),
-      el("button", { class: "switch" + (state.think ? " on" : ""), type: "button" })
-    );
-    $(".switch", thinkRow).onclick = (e) => {
-      state.think = !state.think;
-      store.set("think", state.think);
-      e.currentTarget.classList.toggle("on", state.think);
+  async function mostrarDiagnostico() {
+    try {
+      const d = await api("service_diagnostics");
+      const cli = await api("cli_version").catch(() => ({ version: null }));
+      nota.textContent = "";
+      nota.append(
+        el("span", { class: d.connected ? "ok" : "err", text: d.connected ? "conectado" : "desligado" }),
+        d.url ? el("code", { text: d.url }) : el("span", { text: "sem endereço" }),
+        cli.version ? el("span", { class: "dim", text: "CLI " + cli.version }) : null
+      );
+      // detalhe em uma linha extra, so quando ha algo errado
+      if (!d.cliPath) {
+        nota.appendChild(el("div", { class: "hint", text: "Executável do OpenCode não encontrado. O app procurou no PATH e no npm; reinstale o CLI ou abra o OpenCode uma vez pelo terminal." }));
+      } else if (!d.registroExiste) {
+        nota.appendChild(el("div", { class: "hint", text: "Registro ainda não publicado: " + (d.registro || "?") }));
+      } else if (!d.connected) {
+        nota.appendChild(el("div", { class: "hint", text: "O registro existe em " + d.registro + ", mas o processo não responde. Use Reiniciar serviço." }));
+      }
+    } catch (e) {
+      nota.textContent = "";
+      nota.append(el("span", { class: "err", text: "não foi possível consultar o serviço" }));
+    }
+  }
+
+  /* --- aparencia --- */
+  const gApar = el("div", { class: "set-group" }, el("div", { class: "set-sec", text: "aparência" }));
+
+  const selTema = el("select", { class: "input" });
+  for (const [id, nome] of THEMES) selTema.appendChild(el("option", { value: id, text: nome, selected: id === state.theme }));
+  selTema.onchange = () => {
+    state.theme = selTema.value;
+    store.set("theme", state.theme);
+    applyTheme();
+  };
+  gApar.appendChild(el("div", { class: "set-row" }, el("span", { class: "lbl", text: "Tema" }), selTema));
+
+  const sws = el("div", { class: "swatches" });
+  for (const [id, cor] of ACCENTS) {
+    const b = el("button", { class: "swatch" + (state.accent === id ? " on" : ""), type: "button", title: id, "aria-label": "destaque " + id });
+    b.style.background = cor;
+    b.onclick = () => {
+      state.accent = state.accent === id ? null : id;
+      store.set("accent", state.accent);
+      applyTheme();
+      for (const x of sws.children) x.classList.remove("on");
+      if (state.accent) b.classList.add("on");
+    };
+    sws.appendChild(b);
+  }
+  gApar.appendChild(el("div", { class: "set-row" }, el("div", { class: "grow" }, el("span", { class: "lbl", text: "Destaque" })), sws));
+
+  const TAMANHOS = [[0.9, "P"], [1, "M"], [1.12, "G"], [1.28, "GG"]];
+  const fsBox = el("div", { class: "fsize" });
+  for (const [v, nome] of TAMANHOS) {
+    const b = el("button", { class: state.fsize === v ? "on" : "", type: "button", text: nome, title: "Tamanho " + v + "x" });
+    b.onclick = () => {
+      state.fsize = v;
+      store.set("fsize", v);
+      applyTheme();
+      for (const x of fsBox.children) x.classList.remove("on");
+      b.classList.add("on");
+    };
+    fsBox.appendChild(b);
+  }
+  gApar.appendChild(el("div", { class: "set-row" }, el("div", { class: "grow" }, el("span", { class: "lbl", text: "Tamanho do texto" })), fsBox));
+
+  gApar.appendChild(
+    setSwitch("Mostrar raciocínio", state.think, (v) => {
+      state.think = v;
+      store.set("think", v);
       renderMessages();
       if (state.view === "paralelo") renderParalelo();
-    };
-    pop.appendChild(thinkRow);
+    })
+  );
+  body.appendChild(gApar);
 
-    pop.appendChild(el("div", { class: "pop-sep" }));
-    const refresh = el("button", { class: "pop-item", type: "button" }, icon("i-refresh"), el("span", { class: "t", text: "Atualizar agora" }));
-    refresh.onclick = async () => {
-      close();
+  /* --- comportamento --- */
+  const gComp = el("div", { class: "set-group" }, el("div", { class: "set-sec", text: "comportamento" }));
+  gComp.appendChild(
+    setSwitch("Mostrar subagentes na lista", state.showSubs, (v) => {
+      state.showSubs = v;
+      store.set("showSubs", v);
+      renderView();
+    })
+  );
+  gComp.appendChild(
+    setSwitch("Marcar sessão como vista ao ficar ociosa", state.markViewed, (v) => {
+      state.markViewed = v;
+      store.set("markViewed", v);
+    })
+  );
+  gComp.appendChild(
+    setSelect("Recortar texto do assistente", state.clampPx, [
+      [0, "nunca"],
+      [240, "curto"],
+      [340, "médio"],
+      [600, "longo"],
+    ], (v) => {
+      state.clampPx = +v;
+      store.set("clampPx", state.clampPx);
+      renderMessages();
+    })
+  );
+  gComp.appendChild(
+    setSelect("Saída de ferramenta", state.outChars, [
+      [600, "curta"],
+      [1600, "média"],
+      [4000, "longa"],
+      [0, "sem limite"],
+    ], (v) => {
+      state.outChars = +v;
+      store.set("outChars", state.outChars);
+      renderMessages();
+    })
+  );
+  gComp.appendChild(
+    setSelect("Sessões na lista", state.listLimit, [
+      [50, "50"],
+      [300, "300"],
+      [1000, "1000"],
+      [100000, "todas"],
+    ], (v) => {
+      state.listLimit = +v;
+      store.set("listLimit", state.listLimit);
+      refreshSessions();
+    })
+  );
+  body.appendChild(gComp);
+
+  /* --- dados --- */
+  const gDad = el("div", { class: "set-group" }, el("div", { class: "set-sec", text: "dados" }));
+  const acts = el("div", { class: "set-acts" });
+  acts.append(
+    setAction("Atualizar agora", "i-refresh", async () => {
       await refreshAll();
       toast("Atualizado", "ok");
-    };
-    pop.appendChild(refresh);
-
-    const vcsBtn = el("button", { class: "pop-item", type: "button" }, icon("i-diff"), el("span", { class: "t", text: "Alterações no diretório" }));
-    vcsBtn.onclick = async () => {
-      close();
+    }),
+    setAction("Alterações no diretório", "i-diff", async () => {
+      closeModal?.();
       try {
         const r = await api("vcs_status");
         const files = r?.data || [];
@@ -3146,21 +3342,38 @@ function openSettings(anchor) {
                 el("span", { class: "tag", text: f.status || "" })
               )))
             : el("p", { class: "dim", text: "Nenhuma alteração registrada." }),
-          actions: [],
         });
       } catch (e) {
         fail(e);
       }
-    };
-    pop.appendChild(vcsBtn);
-  }, { width: 250, align: "end" });
+    }),
+    setAction("Limpar preferências", "i-trash", () => {
+      openModal({
+        title: "Limpar preferências?",
+        subtitle: "Volta tema, destaque, tamanho do texto, atalhos e o diretório para o padrão. As sessões não são tocadas.",
+        actions: [
+          { label: "Limpar", danger: true, run: () => {
+            for (const k of Object.keys(localStorage)) if (k.startsWith("hub.")) localStorage.removeItem(k);
+            toast("Preferências limpas. Reiniciando…", "ok");
+            setTimeout(() => location.reload(), 700);
+          } },
+        ],
+      });
+    }, true)
+  );
+  gDad.appendChild(acts);
+  body.appendChild(gDad);
+
+  closeModal = openModal({ title: "Ajustes", subtitle: "OpenCode Hub", body, wide: true });
+  mostrarDiagnostico();
 }
 
 /* ============================================================
    Modais
    ============================================================ */
 let closeModal = null;
-function openModal({ title, subtitle, body, actions = [], onOpen }) {
+/** `wide` = painel mais alto (ajustes). Devolve a funcao de fechar. */
+function openModal({ title, subtitle, body, actions = [], onOpen, wide }) {
   closeModal?.();
   const root = $("#modalRoot");
   root.textContent = "";
@@ -3195,7 +3408,7 @@ function openModal({ title, subtitle, body, actions = [], onOpen }) {
     foot.appendChild(b);
   }
   root.appendChild(
-    el("div", { class: "modal" },
+    el("div", { class: "modal" + (wide ? " wide" : "") },
       el("div", { class: "modal-head" }, el("h3", { text: title }), subtitle ? el("p", { text: subtitle }) : null),
       el("div", { class: "modal-body" }, body),
       foot
@@ -3444,6 +3657,8 @@ function openMoveModal(s) {
    ============================================================ */
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
+  // escala global de texto: os tokens --t-* sao multiplicados por --fs
+  document.documentElement.style.setProperty("--fs", state.fsize);
   if (state.accent) document.documentElement.dataset.accent = state.accent;
   else delete document.documentElement.dataset.accent;
   document.body.classList.toggle("sb-collapsed", state.sidebarCollapsed);
@@ -3530,7 +3745,7 @@ async function init() {
     t.onclick = () => setView(t.dataset.view);
   });
   $("#dirBtn").onclick = (e) => openDirPicker(e.currentTarget);
-  $("#settingsBtn").onclick = (e) => openSettings(e.currentTarget);
+  $("#settingsBtn").onclick = () => openSettings();
   $("#sidebarToggle").onclick = () => toggleSidebar();
   $("#newSessionBtn").onclick = openNewSession;
   $("#searchInput").oninput = (e) => {
@@ -3582,6 +3797,18 @@ async function init() {
       toggleSidebar();
     }
   });
+
+  // O servico primeiro: todo o resto (sessoes, modelos, eventos) depende
+  // dele. `ensure_service` sobe o OpenCode em segundo plano se preciso, e nao
+  // faz nada se ja estiver de pe.
+  if (state.autostart) {
+    try {
+      await api("ensure_service");
+    } catch {
+      // sem permissao ou CLI ausente: o indicador de conexao mostra o erro e
+      // o painel de ajustes tem o botao para tentar de novo
+    }
+  }
 
   connectEvents();
   // O diretório padrão do app e' o mesmo do servico (`/api/location`), para

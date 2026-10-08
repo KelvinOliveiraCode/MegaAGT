@@ -17,7 +17,7 @@ tokens e custo.
 
 - **Rust + Tauri 2** no backend (só uma ponte HTTP; nada de lógica de UI)
 - **JS puro, sem framework** no frontend (sem build step, sem npm no runtime)
-- **Uma cor de destaque, 9 temas, 5 variantes de cor**
+- **9 temas, 6 cores de destaque**
 
 ---
 
@@ -62,29 +62,43 @@ da interface uma vez — as duas versões divergiram.
 
 ---
 
-## 3. Servidor: o app sobe o serviço sozinho?
+## 3. Servidor: como o app se conecta
 
-**Na maioria das vezes sim.** A resposta exata depende do estado no disco:
+**O app sobe o serviço sozinho na abertura.** Ligado por padrão em *Iniciar o
+serviço ao abrir o app*, dentro dos ajustes. O `init()` chama `ensure_service`
+antes de qualquer outra chamada, porque sessão, modelo e evento dependem dele.
 
-| Situação | O que acontece |
+### O detalhe que custou tempo
+
+`Command::new("opencode")` **não funciona** numa instalação via npm. O que existe
+no PATH são os shims `opencode.cmd` e `opencode.ps1`, e o `CreateProcess` quer um
+executável de verdade — o spawn falhava com `ENOENT`, e o "iniciar serviço" do
+app nunca funcionou de fato.
+
+`api::opencode_bin()` resolve na ordem:
+
+1. `opencode.exe` no PATH (instalação nativa)
+2. alvo do shim npm: `%APPDATA%\npm\node_modules\@opencode\cli\bin\opencode.exe`
+3. desiste → o chamador usa `cmd /c opencode ...`
+
+Todos os subcomandos passam por essa resolução, e o spawn leva
+`CREATE_NO_WINDOW` para não piscar uma janela de console. O filho também não
+herda os handles do app — segurá-los impede o processo de sair quando o Hub fecha.
+
+### Comandos
+
+| Comando | O que faz |
 |---|---|
-| `service.json` **não existe** (primeira vez) | O app **sobe o serviço sozinho** — não precisa do CLI |
-| `service.json` existe **e o processo está vivo** | Conecta normalmente |
-| `service.json` existe **mas o processo morreu** (ex.: reiniciou o PC) | ⚠️ O app **não** inicia sozinho. Mostra `offline — clique para iniciar` e você clica uma vez |
+| `ensure_service` | Sobe só se preciso. É o que o `init()` chama |
+| `start_service` | Sobe e espera ficar pronto |
+| `restart_service` | Derruba e sobe |
+| `stop_service` | Interrompe (o painel desliga o início automático junto) |
+| `service_diagnostics` | Endereço, versão, caminho do registro, caminho do executável, se responde |
+| `cli_version` | Versão do CLI. Executa de verdade — é o teste do spawn |
 
-Por quê: `discover_service()` (`src-tauri/src/api.rs:34`) só **lê**
-`~/.local/state/opencode/service.json`. Quem chama `start_service()` é o
-`event_loop` (`main.rs:858`), e só quando essa leitura **falha**. Se o arquivo
-existe mas o processo morreu, a leitura passa e o app apenas tenta reconectar
-—sobre a barra lateral.
-
-**Resposta curta:** na primeira vez, não precisa abrir o CLI. Depois de
-reiniciar o PC, ou abra o CLI uma vez, ou clique no indicador de conexão.
-
-Se quiser eliminar essa exceptions, o conserto é fazer o `event_loop` também
-disparar `start_service()` quando a conexão SSE falha, e não só quando o
-registro some. Não foi feito de propósito: iniciar um processo a cada
-reconexão derruba serviço que o usuáriovegou a encerrar de propósito.
+O painel de ajustes mostra o estado real e dá para corrigir à mão. Se
+`cliPath` vier vazio, o app não achou o executável: reinstale o CLI ou abra o
+OpenCode uma vez pelo terminal.
 
 ---
 
@@ -170,7 +184,7 @@ para todos:
 
 | Grupo | Comandos |
 |---|---|
-| Serviço | `service_status`, `start_service`, `set_directory`, `default_location` |
+| Serviço | `service_status`, `ensure_service`, `start_service`, `restart_service`, `stop_service`, `service_diagnostics`, `cli_version`, `set_directory`, `default_location` |
 | Sessões | `list_sessions`, `get_session`, `create_session`, `rename_session`, `delete_session`, `delete_sessions`, `active_sessions`, `move_session`, `list_projects` |
 | Mensagens | `list_messages`, `send_prompt`, `interrupt_session`, `mark_viewed`, `get_session_log` |
 | Histórico | `compact_session`, `fork_session`, `stage_revert`, `commit_revert`, `clear_revert` |
@@ -216,7 +230,11 @@ const state = {
 ```
 
 O que persiste em `localStorage` (prefixo `hub.`): `view`, `theme`, `accent`,
-`think`, `directory`, `pins`, `selectedId`, `showSubs`, `sidebarCollapsed`.
+`think`, `directory`, `pins`, `selectedId`, `showSubs`, `sidebarCollapsed`,
+`autostart`, `clampPx`, `outChars`, `listLimit`, `markViewed`, `fsize`.
+
+`fsize` vira `--fs` em `:root` e multiplica os tokens `--t-*` e `--code`, então
+a escala de texto vale para o app inteiro de uma vez.
 
 ### Funções que você vai querer conhecer
 
@@ -277,7 +295,7 @@ raio em 4 valores (`--r-sm..full`). Cores: `--bg`, `--surface`, `--raised`,
 
 Temas: `meia-noite` (padrão), `claro`, `nord`, `dracula`, `solarizado`,
 `monokai`, `terminal`, `contraste`, `por-do-sol`.
-Variantes de destaque: `cyan`, `green`, `amber`, `rose`, `violet`.
+Cores de destaque: `indigo` (padrão), `cyan`, `green`, `amber`, `rose`, `violet`.
 
 ### Camadas (z-index)
 
@@ -452,8 +470,9 @@ subir com CDP → rodar `final-check.mjs`.
 ## 15. Perguntas frequentes
 
 **Preciso abrir o CLI?**
-Não na primeira vez — o app sobe o serviço. Depois de reiniciar o PC, ou
-clique no indicador de conexão, ou abra o CLI uma vez. Ver [seção 3](#3-servidor-o-app-sobe-o-servidor-sozinho).
+Não. O app sobe o serviço sozinho ao abrir (ajustável em *Iniciar o serviço ao
+abrir o app*). Se o executável do CLI não for encontrado, o painel de ajustes
+mostra o motivo. Ver [seção 3](#3-servidor-como-o-app-se-conecta).
 
 **Trocar de modelo não funciona.**
 Quase sempre é `Model.Ref` com `model` em vez de `id`, ou um modelo que
