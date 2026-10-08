@@ -13,7 +13,12 @@
 
   --r-sm: 6px; --r-md: 9px; --r-lg: 12px; --r-full: 999px;
 
-  --t-xs: 11px; --t-sm: 12.5px; --t-md: 13.5px; --t-lg: 16px;
+  /* --fs e escrito por applyTheme() a partir da preferencia "Tamanho do texto".
+     Multiplicar aqui faz o ajuste valer para todo o app de uma vez. */
+  --fs: 1;
+  --t-xs: calc(11px * var(--fs)); --t-sm: calc(12.5px * var(--fs));
+  --t-md: calc(13.5px * var(--fs)); --t-lg: calc(16px * var(--fs));
+  --code: calc(12px * var(--fs));
 
   --dur: 140ms;
 }
@@ -448,7 +453,7 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 
 /* ---------------- codigo com numero de linha ---------------- */
 .code {
-  font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  font-family: var(--mono); font-size: var(--code); line-height: 1.55;
   background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md);
   overflow: hidden; margin: 0;
 }
@@ -541,7 +546,7 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 .blk > summary .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; text-align: right; }
 .blk-content { padding: 9px 12px 11px; border-top: 1px solid var(--line); }
 .blk-content pre {
-  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  font-family: var(--mono); font-size: var(--code); line-height: 1.6;
   white-space: pre-wrap; word-break: break-word; margin: 0;
 }
 .blk.think { border-left: 2px solid color-mix(in srgb, var(--think-ink) 45%, transparent); background: var(--think-bg); }
@@ -862,3 +867,45 @@ body.sb-collapsed #sidebarToggle { color: var(--accent); background: var(--accen
 .grow { flex: 1; min-width: 0; }
 .nowrap { white-space: nowrap; }
 .hidden { display: none !important; }
+
+/* ---------------- painel de ajustes ---------------- */
+.set-col { display: flex; flex-direction: column; gap: var(--sp-5); }
+.set-group { display: flex; flex-direction: column; }
+.set-sec {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin: var(--sp-4) 0 var(--sp-1);
+}
+.set-group:first-child .set-sec { margin-top: 0; }
+.set-row { border-radius: var(--r-sm); }
+.set-row:hover { background: var(--hover); }
+.set-row.stack { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+.set-row .lbl { flex: 1 1 auto; }
+/* rótulo e dica são spans: sem isto eles ficam colados na mesma linha */
+.set-row .grow { display: flex; flex-direction: column; gap: 1px; }
+.set-row .grow .lbl, .set-row .grow .hint { display: block; }
+.set-row .hint { font-size: var(--t-xs); color: var(--muted); }
+.set-row select.input { width: auto; max-width: 190px; flex: none; }
+.set-note {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 11px; border-radius: var(--r-sm);
+  background: var(--raised); border: 1px solid var(--line);
+  font-size: var(--t-xs); color: var(--ink-2);
+}
+.set-note .ok { color: var(--ok); }
+.set-note .err { color: var(--err); }
+.set-note code {
+  font-family: var(--mono); font-size: var(--t-xs);
+  word-break: break-all; color: var(--muted);
+}
+.set-acts { display: flex; gap: var(--sp-2); flex-wrap: wrap; padding: 2px 11px 4px; }
+.set-acts .btn { font-size: var(--t-sm); }
+.fsize { display: flex; gap: 3px; }
+.fsize button {
+  min-width: 30px; padding: 3px 6px; font-size: var(--t-xs); font-weight: 600;
+  border: 1px solid var(--line); background: var(--raised); color: var(--ink-2);
+  border-radius: var(--r-sm);
+}
+.fsize button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* o painel e' mais alto que os outros modais */
+.modal.wide { width: 520px; max-height: 88vh; display: flex; flex-direction: column; }
+.modal.wide .modal-body { overflow-y: auto; }

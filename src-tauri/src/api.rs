@@ -30,6 +30,11 @@ fn registration_path() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".local").join("state").join("opencode").join("service.json"))
 }
 
+/// Evita que apareca uma janela de console ao subir o serviço.
+/// CreateProcess sem esta flag abre um terminal novo, piscando na tela.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Le o registro do servico (~/.local/state/opencode/service.json).
 pub fn discover_service() -> Result<ServiceInfo> {
     let path = registration_path()
@@ -53,13 +58,100 @@ pub fn discover_service() -> Result<ServiceInfo> {
     Ok(ServiceInfo { url, password })
 }
 
+/// Caminho do arquivo de registro, para diagnostico.
+pub fn registration_file() -> Option<PathBuf> {
+    registration_path()
+}
+
+/// Localiza o executavel do OpenCode.
+///
+/// `Command::new("opencode")` falha com ENOENT numa instalacao via npm: o que
+/// existe no PATH sao os shims `opencode.cmd` e `opencode.ps1`, e o
+/// `CreateProcess` nao resolve shim — ele quer um executavel de verdade. Foi
+/// exatamente isso que deixou o "iniciar servico" do app sem nunca funcionar.
+///
+/// Ordem: `.exe` no PATH → alvo do shim npm → desiste (o chamador cai no `cmd /c`).
+pub fn opencode_bin() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let p = dir.join("opencode.exe");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    // alvo do shim: %APPDATA%\npm\node_modules\@opencode\cli\bin\opencode.exe
+    std::env::var_os("APPDATA").and_then(|a| {
+        let p = PathBuf::from(a)
+            .join("npm")
+            .join("node_modules")
+            .join("@opencode")
+            .join("cli")
+            .join("bin")
+            .join("opencode.exe");
+        p.is_file().then_some(p)
+    })
+}
+
+/// Monta o comando do CLI, ja sem janela de console no Windows.
+fn cli(args: &[&str]) -> std::process::Command {
+    use std::process::{Command, Stdio};
+    let mut c = match opencode_bin() {
+        Some(exe) => {
+            let mut c = Command::new(exe);
+            c.args(args);
+            c
+        }
+        // ultimo recurso: o shim do npm via cmd
+        None => {
+            let mut c = Command::new("cmd");
+            c.args(["/c", "opencode"]);
+            c.args(args);
+            c
+        }
+    };
+    // o filho nao pode herdar os handles do app: segura-los impede o
+    // processo de sair quando o Hub fecha
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
+/// Dispara um subcomando do CLI (`service start`, `service restart`, ...).
+pub fn run_cli(args: &[&str]) -> Result<()> {
+    cli(args)
+        .spawn()
+        .with_context(|| format!("falha ao executar 'opencode {}'", args.join(" ")))?;
+    Ok(())
+}
+
 /// Dispara `opencode service start` (nao bloqueia).
 pub fn start_service() -> Result<()> {
-    std::process::Command::new("opencode")
-        .args(["service", "start"])
-        .spawn()
-        .context("falha ao executar 'opencode service start' (o CLI do OpenCode esta no PATH?)")?;
-    Ok(())
+    run_cli(&["service", "start"])
+}
+
+/// Reinicia o servico em segundo plano.
+pub fn restart_service() -> Result<()> {
+    run_cli(&["service", "restart"])
+}
+
+/// Interrompe o servico.
+pub fn stop_service() -> Result<()> {
+    run_cli(&["service", "stop"])
+}
+
+/// Executa o CLI e devolve a saida. So para diagnostico (bloqueia).
+pub fn cli_version() -> Option<String> {
+    use std::process::Stdio;
+    let mut c = cli(&["--version"]);
+    c.stdout(Stdio::piped());
+    let out = c.output().ok()?;
+    let txt = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!txt.is_empty()).then_some(txt)
 }
 
 /// Cliente HTTP do servico OpenCode: Basic auth + escopo opcional de diretório.

@@ -49,8 +49,25 @@ do modelo — é assim que o OpenCode modela raciocínio.
   o Explorer na pasta exata (`C:\Users\...\project`, com espaços ou não).
 - Barras de rolagem finas em toda a interface, com trilho invisível.
 
+### Ajustes
+Painel completo (ícone de engrenagem na barra superior), em quatro seções:
+- **Serviço do OpenCode** — estado real (endereço, versão, caminho do executável), ligar/desligar o início automático, conectar, reiniciar e parar.
+- **Aparência** — tema, cor de destaque, tamanho do texto e raciocínio.
+- **Comportamento** — subagentes na lista, marcar como vista, quanto texto recortar, limite de saída de ferramenta e quantas sessões listar.
+- **Dados** — atualizar, alterações do diretório e limpar preferências.
+
+### Serviço em segundo plano
+O app **sobe o OpenCode sozinho ao abrir** — sem janela de console, e sem você
+precisar abrir o CLI antes. Se o executável não for encontrado, o painel de
+ajustes diz qual foi o problema e por onde procurou.
+
+> Detalhe que só aparece na instalação via npm: existe `opencode.cmd` e
+> `opencode.ps1` no PATH, mas **não** existe `opencode.exe`. O Windows não
+> resolve shim ao spawnar, então o app procura o executável real dentro do
+> próprio `node_modules` do CLI.
+
 ### Aparência
-9 temas + 5 cores de destaque, toggle de raciocínio, tudo em `localStorage`. Sem emojis na interface.
+9 temas + 6 cores de destaque, toggle de raciocínio, tudo em `localStorage`. Sem emojis na interface.
 
 ## Como funciona
 

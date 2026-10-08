@@ -117,6 +117,97 @@ async fn start_service(state: State<'_, AppState>) -> Result<Value, String> {
     Err("o serviço não ficou pronto a tempo. Abra o OpenCode uma vez e tente de novo.".to_string())
 }
 
+/// Espera o servico responder. Retorna o estado quando responde.
+async fn aguardar_servico(state: &State<'_, AppState>, tentativas: u32) -> Option<Value> {
+    for _ in 0..tentativas {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        if let Ok(info) = api::discover_service() {
+            state.invalidate();
+            let api = Api::with_directory(&info, state.directory());
+            if let Ok(v) = api.get("/api/info").await {
+                return Some(json!({
+                    "connected": true,
+                    "url": api.base(),
+                    "directory": api.directory(),
+                    "info": v
+                }));
+            }
+        }
+    }
+    None
+}
+
+/// Garante o servico no ar: se ja responde, nao faz nada.
+///
+/// Usado na abertura do app. Antes so havia `start_service`, que exigia um
+/// clique — e que, alem disso, nunca funcionou porque nao achava o executavel
+/// do CLI (ver `api::opencode_bin`).
+#[tauri::command(rename_all = "snake_case")]
+async fn ensure_service(state: State<'_, AppState>) -> Result<Value, String> {
+    if let Some(v) = aguardar_servico(&state, 1).await {
+        return Ok(v);
+    }
+    api::start_service().map_err(|e| e.to_string())?;
+    aguardar_servico(&state, 30)
+        .await
+        .ok_or_else(|| "o serviço não ficou pronto a tempo.".to_string())
+}
+
+/// Reinicia o servico: derruba e sobe de novo, esperando ficar pronto.
+#[tauri::command(rename_all = "snake_case")]
+async fn restart_service(state: State<'_, AppState>) -> Result<Value, String> {
+    api::restart_service().map_err(|e| e.to_string())?;
+    aguardar_servico(&state, 40)
+        .await
+        .ok_or_else(|| "o serviço não voltou a tempo.".to_string())
+}
+
+/// Interrompe o servico em segundo plano.
+#[tauri::command(rename_all = "snake_case")]
+async fn stop_service(state: State<'_, AppState>) -> Result<Value, String> {
+    api::stop_service().map_err(|e| e.to_string())?;
+    state.invalidate();
+    Ok(json!({ "connected": false }))
+}
+
+/// Diagnostico do servico: onde esta o registro, se existe, onde esta o
+/// executavel do CLI, e se o servico responde.
+#[tauri::command(rename_all = "snake_case")]
+async fn service_diagnostics(state: State<'_, AppState>) -> Result<Value, String> {
+    let registro = api::registration_file();
+    let registro_existe = registro.as_ref().map(|p| p.is_file()).unwrap_or(false);
+    let bin = api::opencode_bin();
+    let servico = api::discover_service().ok();
+
+    let (connected, url, info) = match &servico {
+        Some(info) => {
+            let api = Api::new(info);
+            match api.get("/api/info").await {
+                Ok(v) => (true, api.base().to_string(), v),
+                Err(e) => (false, api.base().to_string(), json!({ "erro": e.to_string() })),
+            }
+        }
+        None => (false, String::new(), json!({})),
+    };
+
+    Ok(json!({
+        "connected": connected,
+        "url": url,
+        "info": info,
+        "directory": state.directory(),
+        "registro": registro.map(|p| p.to_string_lossy().to_string()),
+        "registroExiste": registro_existe,
+        "cliPath": bin.as_ref().map(|p| p.to_string_lossy().to_string()),
+        "cliNoPath": bin.is_some(),
+    }))
+}
+
+/// Versao do CLI. Lento (spawna um processo) entao nao entra em service_diagnostics.
+#[tauri::command(rename_all = "snake_case")]
+async fn cli_version() -> Result<Value, String> {
+    Ok(json!({ "version": api::cli_version() }))
+}
+
 /// Seleciona o diretório de trabalho. Ausente volta para "todos os diretórios".
 #[tauri::command(rename_all = "snake_case")]
 async fn set_directory(
@@ -939,6 +1030,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             service_status,
             start_service,
+            ensure_service,
+            restart_service,
+            stop_service,
+            service_diagnostics,
+            cli_version,
             set_directory,
             default_location,
             list_projects,
