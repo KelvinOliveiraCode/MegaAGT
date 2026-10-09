@@ -3963,7 +3963,18 @@ function makeCardDraggable(card, sid) {
       if (ev.target.closest("button")) return;
       const ini = { x: ev.clientX, y: ev.clientY };
       let arrastando = false;
-        let novaOrdem = null;
+      let novaOrdem = null;
+      // Centros dos cartoes e a ordem base, medidos UMA vez no
+      // começo do arraste. O cartao que se move usa transform
+      // (so' composiçao), entao os demais nao saem do lugar:
+      // reler getBoundingClientRect de todos a cada pointermove
+      // forçava layout síncrono dezenas de vezes por segundo —
+      // era o que travava o arraste, pior em sessao gerando
+      // conteúdo, onde o reflow é o mais caro.
+      let centros = null;
+      let origCx = 0;
+      let origCy = 0;
+      let ordemBase = null;
       const mover = (e) => {
         const dx = e.clientX - ini.x;
         const dy = e.clientY - ini.y;
@@ -3973,31 +3984,38 @@ function makeCardDraggable(card, sid) {
           parAjustando = true;
           card.classList.add("dragging");
           head.style.cursor = "grabbing";
+          const rc = card.getBoundingClientRect();
+          origCx = rc.left + rc.width / 2;
+          origCy = rc.top + rc.height / 2;
+          centros = [...document.querySelectorAll(".p-card")]
+            .filter((c) => c !== card)
+            .map((c) => {
+              const cr = c.getBoundingClientRect();
+              return { sid: c.dataset.sid, cx: cr.left + cr.width / 2, cy: cr.top + cr.height / 2 };
+            });
+          ordemBase = parOrder(state.pins.filter((x) => sessionById(x)));
         }
         card.style.transform = "translate(" + dx + "px," + dy + "px)";
         card.style.zIndex = "30";
-        const r = card.getBoundingClientRect();
-        const cx = r.left + r.width / 2;
-        const cy = r.top + r.height / 2;
+        // o centro do cartao e' o original deslocado: sem reflow
+        const cx = origCx + dx;
+        const cy = origCy + dy;
         let melhor = null;
         let melhorD = Infinity;
-        for (const c of document.querySelectorAll(".p-card")) {
-          if (c === card) continue;
-          const cr = c.getBoundingClientRect();
-          const d = Math.hypot(cx - (cr.left + cr.width / 2), cy - (cr.top + cr.height / 2));
+        for (const c of centros) {
+          const d = Math.hypot(cx - c.cx, cy - c.cy);
           if (d < melhorD) {
             melhorD = d;
             melhor = c;
           }
         }
-        // recalcula sempre a partir da ordem REAL (state.parOrder ainda nao foi
-        // mexido), senao cada quadro desfaz a troca do anterior
+        // rascunho a partir da ordem REAL (state.parOrder ainda nao
+        // foi mexido), senao cada quadro desfaz a troca do anterior
         if (melhor) {
-          const atual = parOrder(state.pins.filter((x) => sessionById(x)));
-          const de = atual.indexOf(sid);
-          const para = atual.indexOf(melhor.dataset.sid);
+          const de = ordemBase.indexOf(sid);
+          const para = ordemBase.indexOf(melhor.sid);
           if (de > -1 && para > -1 && de !== para) {
-            const destino = atual.slice();
+            const destino = ordemBase.slice();
             destino.splice(para, 0, destino.splice(de, 1)[0]);
             novaOrdem = destino; // so um rascunho: grava ao soltar
           }
