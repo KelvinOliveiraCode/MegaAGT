@@ -580,6 +580,14 @@ Também entraram: `session.execution.started` / `session.execution.succeeded`
 `session.inbox.delivered`, que é **o resultado do subagente voltando para
 quem o chamou**. Sem tratá-los, o pai seguia esperando com a tela muda.
 
+### O resumo da compactação mora na mensagem
+
+A mensagem de tipo `compaction` carrega `summary`, `reason`, `status`, `cost` e
+`tokens`. O app descartava tudo e escrevia só "contexto compactado". Agora o
+resumo entra num `<details>` recolhível, com markdown renderizado por `md()` —
+é ele que o modelo lê no lugar do histórico, então escondê-lo tirava justamente
+a parte que interessa.
+
 ### Subagente rodando não pode ser invisível
 
 `subsAtivos(pid)` = `childrenOf(pid)` filtrado por `isBusy`, e `isBusy` vem de

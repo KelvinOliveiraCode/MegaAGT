@@ -2617,9 +2617,30 @@ function metaNote(m) {
     case "locationSwitched":
       add(`diretório ·  ${shortPath(m.location?.directory || "")}`);
       break;
-    case "compaction":
-      add("contexto compactado");
-      break;
+    case "compaction": {
+      // O resumo e' a parte que interessa: e' ele que o modelo le no lugar
+      // do historico. Ele vem em markdown, entao passa pelo md().
+      const resumo = String(m.summary || "").trim();
+      const tok = m.tokens?.total || (m.tokens ? (m.tokens.input || 0) + (m.tokens.output || 0) : 0);
+      const d = el("details", { class: "blk compact" });
+      d.appendChild(el("summary", {},
+        icon("i-compact"),
+        el("span", { class: "lbl", text: "contexto compactado" }),
+        m.reason ? el("span", { class: "tag", text: m.reason }) : null,
+        m.status && m.status !== "completed" ? el("span", { class: "tstatus " + m.status, text: m.status }) : null,
+        tok ? el("span", { class: "chip muted", text: fmtNum(tok) + " tokens" }) : null,
+        m.cost ? el("span", { class: "chip muted", text: "$" + Number(m.cost).toFixed(4) }) : null,
+        resumo ? el("span", { class: "dim", text: resumo.split("\n").length + " linhas" }) : null
+      ));
+      const corpo = el("div", { class: "blk-content" });
+      if (resumo) {
+        corpo.appendChild(el("div", { class: "prose", html: md(resumo) }));
+      } else {
+        corpo.appendChild(el("p", { class: "dim", text: "sem resumo" }));
+      }
+      d.appendChild(corpo);
+      return el("div", {}, d);
+    }
     default:
       add(m.type || "mensagem");
   }
