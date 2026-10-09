@@ -569,6 +569,27 @@ mostra os dois; clicar abre o JSON. Foi assim que se descobriu
 lista pela resposta apagava mensagens na tela. `mergeServer` une por id e
 nunca deixa a resposta diminuir o que já está lá.
 
+### `session.tool.failed`, não `session.tool.error`
+
+O evento de falha de ferramenta se chama **`failed`**. O app tratava
+`error` — que o servidor não emite — então 12 falhas passaram sem nenhum
+sinal na conversa. Os dois rótulos caem no mesmo `case` agora.
+
+Também entraram: `session.execution.started` / `session.execution.succeeded`
+(o app se apoiava só em `session.idle`) e `session.inbox.enqueued` /
+`session.inbox.delivered`, que é **o resultado do subagente voltando para
+quem o chamou**. Sem tratá-los, o pai seguia esperando com a tela muda.
+
+### Subagente rodando não pode ser invisível
+
+`subsAtivos(pid)` = `childrenOf(pid)` filtrado por `isBusy`, e `isBusy` vem de
+`/api/session/active` (a fonte autoritativa). O painel é o mesmo DOM nos dois
+modos: `subsPainel(sid, compacto)`. No Foco ele mora numa barra fixa
+(`#subsBar`); no Paralelo, dentro do `.p-body` de cada cartão.
+
+O que não recriar: o timer do Paralelo repinta **só** o host dos subagentes.
+Chamar `renderView()` ali destruiria o campo de mensagem e o rascunho.
+
 ### `/api/config` tem segredo
 
 A resposta traz os documentos de configuração com valores literais,

@@ -690,11 +690,28 @@ async function refreshSessions() {
     updateCounts();
     if (state.view !== "foco" && sig(state.sessions) !== sig(prev)) renderView();
     else if (state.view === "foco" && !selectionChanged) renderSessionHeader();
+    if (state.view === "foco") renderSubs(state.selectedId);
   } catch (e) {
     console.error(e);
   } finally {
     refreshingSessions = false;
   }
+}
+
+/** Subagentes de `pid` que estao rodando agora. */
+function subsAtivos(pid) {
+  if (!pid) return [];
+  return childrenOf(pid).filter((s) => isBusy(s.id));
+}
+
+/** Ha subagente por baixo desta sessao: rodando, ou chamado e aguardando. */
+function temSubs(pid) {
+  if (!pid) return false;
+  const kids = childrenOf(pid);
+  if (!kids.length) return false;
+  // rodando = em /api/session/active; esperando = a sessao pai esta ocupada
+  // e a crianca ainda nao (o modelo chamou e esta na fila)
+  return kids.some((k) => isBusy(k.id) || (isBusy(pid) && !k.time?.updated));
 }
 
 /** `/api/session/active` e' a fonte autoritativa do que esta rodando. */
@@ -715,7 +732,7 @@ async function refreshActive() {
     }
     if (changed) {
       renderSidebar();
-      if (state.view === "foco") renderSessionHeader();
+      if (state.view === "foco") { renderSessionHeader(); renderSubs(state.selectedId); }
       if (state.view === "paralelo") renderParalelo();
     }
   } catch {
@@ -880,6 +897,7 @@ function clearLive(sid, mid) {
 }
 
 const refetchTimers = {};
+let _subsTimer = null;
 const refetchTries = {};
 
 /**
@@ -1214,6 +1232,8 @@ function handleEvent(ev) {
       scheduleRefetch(sid);
       break;
     }
+    // falha de ferramenta: o nome real do evento e failed; error nao chega
+    case "session.tool.failed":
     case "session.tool.error": {
       const lm = liveMsg(sid, mid);
       const t = lm.tools.get(d.id) || { name: "tool", status: "error" };
@@ -1269,6 +1289,44 @@ function handleEvent(ev) {
       if (sid === state.selectedId) renderSessionHeader();
       break;
     }
+    // conclusao explicita da execucao. O app se apoiava em session.idle;
+    // este chega antes e permite limpar o overlay sem esperar.
+    case "session.execution.started": {
+      setBusy(sid, true);
+      break;
+    }
+    case "session.execution.succeeded": {
+      clearLive(sid);
+      delete refetchTries[sid];
+      setBusy(sid, false);
+      scheduleRefetch(sid);
+      queueSessionRefresh();
+      break;
+    }
+    // resultado de subagente voltando para quem o chamou. E' aqui que a
+    // resposta do background chega na conversa do pai; sem tratar, o pai
+    // seguia esperando com a tela muda.
+    case "session.inbox.enqueued":
+    case "session.inbox.delivered": {
+      const item = d.item || d.data?.item || d;
+      const meta = item?.metadata || {};
+      state.subsRodando[sid] = state.subsRodando[sid] || [];
+      if (meta.childID && meta.source === "subagent") {
+        if (meta.state === "completed") {
+          state.subsRodando[sid] = state.subsRodando[sid].filter((x) => x !== meta.childID);
+        } else if (!state.subsRodando[sid].includes(meta.childID)) {
+          state.subsRodando[sid].push(meta.childID);
+        }
+      }
+      // o resultado virou mensagem: busca o historico de novo
+      scheduleRefetch(sid);
+      queueSessionRefresh();
+      renderSubs(sid);
+      break;
+    }
+    case "session.viewed":
+      markViewed(sid, true);
+      break;
     case "session.idle": {
       delete state.retry[sid];
       renderRetry(sid);
@@ -1674,8 +1732,11 @@ function focusShell() {
   const composer = buildComposer(s, { foco: tinhaFoco, cursor });
   const retry = el("div", { id: "retryBar" });
   retry.className = "hidden";
-  root.append(head, perms, forms, retry, buscaWrap, chat, composer);
+  const subs = el("div", { id: "subsBar" });
+  subs.className = "hidden";
+  root.append(head, perms, forms, retry, subs, buscaWrap, chat, composer);
   renderRetry(state.selectedId);
+  renderSubs(state.selectedId);
   renderForms(state.selectedId);
   refreshForms(state.selectedId);
   if (tinhaFoco) {
@@ -2088,6 +2149,57 @@ async function refreshForms(sid) {
 }
 
 /** Aviso de nova tentativa do provedor, acima do compositor. */
+/**
+ * Subagentes rodando em segundo plano por conta de uma sessao.
+ *
+ * O modelo chamou e esta esperando: sem este painel nao ha sinal nenhum
+ * disso na conversa — ele apenas para de responder e nada explica.
+ * `compacto` deixa so uma linha, para caber no cartao do Paralelo.
+ */
+function subsPainel(sid, compacto) {
+  const lista = sid ? subsAtivos(sid) : [];
+  if (!lista.length) return null;
+  const caixa = el("div", { class: "subs-panel" + (compacto ? " compacto" : "") },
+    el("div", { class: "subs-head" },
+      icon("i-cpu"),
+      el("span", { class: "t", text: lista.length === 1 ? "1 subagente rodando" : lista.length + " subagentes rodando" }),
+      compacto ? null : el("span", { class: "spin" })
+    )
+  );
+  const linhas = el("div", { class: "subs-lista" });
+  for (const s of lista) {
+    const tk = s.tokens || {};
+    const linha = el("button", { class: "subs-item", type: "button", title: s.id });
+    linha.append(
+      el("span", { class: "agent-tag", text: s.agent || "agente" }),
+      el("span", { class: "t", text: s.title || s.id }),
+      el("span", { class: "tk", text: fmtNum(tk.input || 0) + "/" + fmtNum(tk.output || 0) }),
+      el("span", { class: "wh", text: timeAgo(s.time?.updated || s.time?.created) })
+    );
+    linha.onclick = () => {
+      selectSession(s.id);
+      setView("foco");
+    };
+    linhas.appendChild(linha);
+  }
+  caixa.appendChild(linhas);
+  return caixa;
+}
+
+/** Barra fixa acima do compositor, no Foco. */
+function renderSubs(sid) {
+  const bar = document.getElementById("subsBar");
+  if (!bar) return;
+  bar.textContent = "";
+  const painel = subsPainel(sid, false);
+  if (!painel) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+  bar.appendChild(painel);
+}
+
 function renderRetry(sid) {
   const bar = document.getElementById("retryBar");
   if (!bar) return;
@@ -3975,7 +4087,17 @@ function renderParalelo() {
     );
 
     const body = el("div", { class: "p-body" }, el("div", { class: "msg-inner" }));
+    // subagentes rodando por conta deste cartao. No Paralelo o espaco e' curto,
+    // entao o painel e' a versao compacta e entra no fim do corpo.
+    const subsHost = el("div", { class: "p-subs" });
+    body.appendChild(subsHost);
     card.appendChild(body);
+    const pintarSubs = () => {
+      subsHost.textContent = "";
+      const painel = subsPainel(sid, true);
+      if (painel) subsHost.appendChild(painel);
+    };
+    pintarSubs();
 
     const input = el("input", { placeholder: "Mensagem…" });
     input.value = state.draft.cards[sid] || "";
@@ -4008,6 +4130,7 @@ function renderParalelo() {
         limparAnexos(sid);
         state.messages[sid] = mergePending(sid, state.messages[sid] || []);
         renderParBody(card, sid);
+        pintarSubs();
         paintCardBusy(card, sid);
         queueSessionRefresh();
       } catch (e) {
@@ -4029,6 +4152,7 @@ function renderParalelo() {
     refreshMessages(sid).then(() => {
       renderParBody(card, sid);
       paintCardBusy(card, sid);
+      pintarSubs();
     });
 
     if (focoAntes.has(sid)) {
@@ -4043,6 +4167,24 @@ function renderParalelo() {
     }
   }
   root.appendChild(grid);
+  // os cartoes ja existem: so' repinta o painel de subagentes. Faz isso
+  // sem recriar o grid, que perderia o foco e o rascunho de cada campo.
+  clearInterval(_subsTimer);
+  _subsTimer = setInterval(() => {
+    if (state.view !== "paralelo" || parAjustando) return;
+    for (const cardEl of document.querySelectorAll(".p-card")) {
+      const host = cardEl.querySelector(".p-subs");
+      if (!host) continue;
+      const painel = subsPainel(cardEl.dataset.sid, true);
+      if (!painel) { host.textContent = ""; continue; }
+      // so troca quando mudou, para nao brigar com o clique
+      const agora = painel.querySelectorAll(".subs-item").length;
+      if (host.childElementCount !== 1 || host.firstElementChild.childElementCount !== 1 + agora) {
+        host.textContent = "";
+        host.appendChild(painel);
+      }
+    }
+  }, 2000);
 }
 
 function renderParBody(card, sid) {
