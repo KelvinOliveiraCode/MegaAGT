@@ -1258,3 +1258,10 @@ body.soltando::after {
 .subs-panel.compacto .subs-item { padding: 3px 8px; }
 .subs-panel.compacto .subs-head { padding: 4px 8px; }
 .subs-panel.compacto .subs-item .tk { display: none; }
+/* bloco de compactacao: o resumo e' markdown, e' prosa de verdade */
+.blk.compact > summary { color: var(--ink-2); }
+.blk.compact > summary .lbl { font-weight: 600; }
+.blk.compact > summary .tag { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: var(--r-full); background: var(--raised); border: 1px solid var(--line); color: var(--muted); text-transform: uppercase; }
+.blk.compact > summary .chip { margin-left: auto; }
+.blk.compact .blk-content .prose { font-size: var(--t-sm); }
+.blk.compact .blk-content { max-height: 480px; overflow-y: auto; }
