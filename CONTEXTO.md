@@ -8,6 +8,15 @@ Descreve o que existe, por que existe assim, e onde mexer em cada coisa.
 
 ---
 
+## Integração com o Hermes (planejada, não implementada)
+
+O plano está em **[HERMES.md](./HERMES.md)**. Resumo: uma segunda aba rodando
+hermes chat --format stream-json como subprocesso, com a casca de UI já
+existente. A descoberta que mudou a recomendação: **kilo1–kilo4 já são
+provedores do OpenCode** no opencode.jsonc, então os modelos kilo já funcionam
+no app — o Hermes entra pelas capacidades (browser de perfil real, bots, MoA,
+pool de credenciais), não pelo acesso a modelo.
+
 ## 1. O que é
 
 Hub desktop para o **OpenCode CLI v2**. Não é um cliente genérico de chat: ele
