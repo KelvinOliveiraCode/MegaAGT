@@ -93,6 +93,31 @@ Painel completo (ícone de engrenagem na barra superior), em quatro seções:
 - **Comportamento** — subagentes na lista, marcar como vista, quanto texto recortar, limite de saída de ferramenta e quantas sessões listar.
 - **Dados** — atualizar, alterações do diretório e limpar preferências.
 
+### Aba Ambiente
+Quatro cartões que o app não mostrava em lugar nenhum:
+- **Contexto da sessão** — a composição real (quantos itens, de que tipo,
+  tokens e custo) e o resumo da compactação, em vez de despejar os megabytes
+  do histórico.
+- **Servidores MCP** — quais estão conectados e se algum falhou.
+- **Permissões salvas** — tudo que você aprovou com *Sempre*, com botão para
+  **revogar** cada regra. Antes disso era permanente e invisível.
+- **Configuração** — os documentos de config e suas seções (nunca os valores:
+  o config guarda chave de API em texto puro).
+
+### Busca dentro da sessão
+Campo acima do chat que filtra as mensagens da sessão aberta, com contador
+`acertos/total`. Some sozinho quando não há nada digitado.
+
+### Avisos que antes não existiam
+- **Nova tentativa do provedor**: quando o modelo bate num 429 ou num
+  endpoint fora, a sessão ficava parada por segundos sem sinal nenhum. Agora
+  aparece a tentativa e o motivo.
+- **Eventos sem tratamento**: a aba Eventos lista qualquer tipo de evento que
+  o app não saiba tratar, com contagem e o **JSON recebido** ao clicar.
+  Antes eles caíam num `break` silencioso.
+- **Modo só raciocínio**: as chamadas de ferramenta não são desenhadas nesse
+  modo; agora há um aviso na tela dizendo isso, em vez da sessão parecer vazia.
+
 ### Serviço em segundo plano
 O app **sobe o OpenCode sozinho ao abrir** — sem janela de console, e sem você
 precisar abrir o CLI antes. Se o executável não for encontrado, o painel de

@@ -129,6 +129,14 @@ const state = {
   // rascunho do compositor. O composer e' reconstruido a cada render (SSE,
   // troca de modelo, config), e sem isso o texto que estava sendo digitado
   // sumia no meio da frase.
+  forms: {},      // sid -> formularios esperando resposta
+  retry: {},      // sid -> { attempt, at, error } enquanto o provedor reinsiste
+  formasVistas: new Set(),
+  msgFilter: "",
+  ambiente: null,
+  // tipo -> { n, amostra }. A amostra e o que torna o painel util: sem ela
+  // daria para saber que algo chega, mas nao o que veio dentro.
+  ignorados: {},
   draft: {
     foco: store.get("draft.foco", ""),
     cards: store.get("draft.cards", {}),
@@ -1091,6 +1099,34 @@ function handleEvent(ev) {
     queueSessionRefresh();
   }
 
+  // Provedor ou modelo mudou (alguem conectou uma chave, ou o catalogo
+  // atualizou). Sem isto o seletor segue mostrando a lista velha.
+  if (ev.type === "provider.updated" || ev.type === "model.updated") {
+    refreshMeta();
+    if (state.view === "paralelo") renderView();
+    else renderSessionHeader();
+  }
+  // Projeto mudou: a lista de sessoes e os diretorios conhecidos tambem.
+  if (ev.type === "project.updated") {
+    refreshProjects();
+    queueSessionRefresh();
+  }
+
+  // a volta da resposta encerra o aviso de nova tentativa
+  if (state.retry[sid] && (ev.type === "session.text.started" || ev.type === "session.text.delta" || ev.type === "session.tool.called")) {
+    delete state.retry[sid];
+    renderRetry(sid);
+  }
+
+  // Formulario e permissao chegam por eventos que este app ainda nao sabe
+  // nomear. Em vez de arriscar o nome exato, qualquer evento que mencione
+  // "form" ou "permission" forcaja a consulta: e' barato e nao depende de
+  // acertar o nome.
+  if (ev.type.includes("form") || ev.type.includes("permission")) {
+    refreshForms(sid);
+    refreshPermissions(sid);
+  }
+
   if (ev.type === "server.connected") {
     updateEventStatus();
     return;
@@ -1188,6 +1224,32 @@ function handleEvent(ev) {
       scheduleRefetch(sid);
       break;
     }
+    // Ferramenta em execução. Chega antes de called/success e some sem
+    // tratamento: a tool passava a existir só no final, e a execução inteira
+    // ficava invisível.
+    case "session.tool.progress": {
+      setBusy(sid, true);
+      const lm = liveMsg(sid, mid);
+      const t = lm.tools.get(d.id) || { name: d.name || "ferramenta", status: "running" };
+      if (d.name) t.name = d.name;
+      t.status = "running";
+      t.progress = d.metadata && typeof d.metadata === "object" ? d.metadata : d.metadata;
+      lm.tools.set(d.id, t);
+      patchStream(sid, mid);
+      break;
+    }
+    // O provedor falhou (429, endpoint fora) e vai reinsistir. Sem este
+    // case a sessao fica parada na tela por varios segundos sem nenhum
+    // sinal — que e' indistinguivel de travada.
+    case "session.retry.scheduled": {
+      setBusy(sid, true);
+      const err = d.error;
+      state.retry[sid] = { attempt: d.attempt || 1, at: d.at || Date.now(), error: err };
+      renderForms(sid);
+      renderRetry(sid);
+      if (state.view === "paralelo") renderView();
+      break;
+    }
     case "session.step.started": {
       setBusy(sid, true);
       patchStream(sid, mid);
@@ -1208,6 +1270,8 @@ function handleEvent(ev) {
       break;
     }
     case "session.idle": {
+      delete state.retry[sid];
+      renderRetry(sid);
       // a sessão terminou: o overlay live e' invalido por definicao
       clearLive(sid);
       delete refetchTries[sid];
@@ -1226,8 +1290,16 @@ function handleEvent(ev) {
       if (sid === state.selectedId) toast(errorText(d.error, "erro na sessão"), "err");
       break;
     }
-    default:
+    default: {
+      // Evento que o app nao conhece. Antes caia num `break` silencioso e a
+      // sessao podia ficar parada sem nenhum sinal — foi assim que o
+      // formulario interativo passou despercebido. Agora fica registrado e
+      // aparece na aba Eventos.
+      const antes = state.ignorados[ev.type] || { n: 0, amostra: null };
+      state.ignorados[ev.type] = { n: antes.n + 1, amostra: antes.amostra || ev };
+      if (state.view === "eventos") { renderEventList(); atualizarIgnorados(); }
       break;
+    }
   }
 
   updateEventStatus();
@@ -1544,6 +1616,7 @@ function renderView() {
   else if (state.view === "paralelo") renderParalelo();
   else if (state.view === "subagentes") renderSubagentes();
   else if (state.view === "eventos") renderEventos();
+  else if (state.view === "ambiente") renderAmbiente();
   $$("#viewTabs .tab").forEach((t) => {
     const on = t.dataset.view === state.view;
     t.classList.toggle("active", on);
@@ -1572,8 +1645,39 @@ function focusShell() {
   chat.appendChild(scroll);
   const perms = el("div", { id: "permBar" });
   perms.className = "hidden";
+  // formularios do modelo ficam acima do compositor, no mesmo lugar dos
+  // pedidos de permissao: os dois sao "algo esperando voce"
+  const forms = el("div", { id: "formBar" });
+  forms.className = "hidden";
+  // busca dentro da sessao: filtra as mensagens mostradas
+  const buscaWrap = el("div", { class: "m-search" });
+  const buscaIn = el("input", {
+    type: "search",
+    placeholder: "buscar nesta sessão",
+    spellcheck: "false",
+    "aria-label": "Buscar nas mensagens desta sessão",
+  });
+  buscaIn.value = state.msgFilter;
+  const contaBusca = el("span", { class: "m-count", id: "mCount" });
+  const limparBusca = el("button", { class: "btn ghost", text: "limpar", type: "button" });
+  const filtrou = () => {
+    state.msgFilter = buscaIn.value;
+    limparBusca.style.display = state.msgFilter ? "" : "none";
+    buscaWrap.classList.toggle("vazia", !state.msgFilter);
+    renderMessages();
+    atualizarContagemBusca();
+  };
+  buscaIn.oninput = filtrou;
+  limparBusca.onclick = () => { buscaIn.value = ""; filtrou(); };
+  buscaWrap.append(icon("i-search"), buscaIn, contaBusca, limparBusca);
+  filtrou();
   const composer = buildComposer(s, { foco: tinhaFoco, cursor });
-  root.append(head, perms, chat, composer);
+  const retry = el("div", { id: "retryBar" });
+  retry.className = "hidden";
+  root.append(head, perms, forms, retry, buscaWrap, chat, composer);
+  renderRetry(state.selectedId);
+  renderForms(state.selectedId);
+  refreshForms(state.selectedId);
   if (tinhaFoco) {
     // espera o proximo quadro: focar antes de criar o elemento nao faz nada
     requestAnimationFrame(() => {
@@ -1971,6 +2075,161 @@ async function refreshPermissions(sid) {
   renderPermissions(sid);
 }
 
+/* ---------- formularios que o modelo abriu ---------- */
+async function refreshForms(sid) {
+  if (!sid) return;
+  try {
+    const r = await api("session_forms", { session_id: sid });
+    state.forms[sid] = r?.data || [];
+  } catch {
+    state.forms[sid] = [];
+  }
+  renderForms(sid);
+}
+
+/** Aviso de nova tentativa do provedor, acima do compositor. */
+function renderRetry(sid) {
+  const bar = document.getElementById("retryBar");
+  if (!bar) return;
+  const r = sid ? state.retry[sid] : null;
+  bar.textContent = "";
+  if (!r) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+  const msg = errorText(r.error, "o provedor falhou");
+  bar.appendChild(el("div", { class: "mode-notice" },
+    icon("i-refresh"),
+    el("span", { text: "Tentativa " + r.attempt + ": " + msg + " — aguardando para reinsistir." })
+  ));
+}
+
+/** Remove os formularios que ja foram respondidos ou cancelados. */
+function formasPendentes(sid) {
+  return (state.forms[sid] || []).filter((f) => f && f.state !== "settled");
+}
+
+function renderForms(sid) {
+  const bar = $("#formBar");
+  if (!bar) return;
+  const lista = sid ? formasPendentes(sid) : [];
+  bar.textContent = "";
+  if (!lista.length) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+  for (const f of lista) {
+    bar.appendChild(formCard(sid, f));
+  }
+}
+
+function formCard(sid, f) {
+  const campos = f.fields || {};
+  const nomes = Object.keys(campos);
+  const caixa = el("div", { class: "form-fields" });
+  const valores = {};
+
+  for (const nome of nomes) {
+    const c = campos[nome] || {};
+    const tipo = typeof c === "string" ? c : c.type || "string";
+    const rotulo = (typeof c === "object" && (c.label || c.title)) || nome;
+    const linha = el("div", { class: "field" }, el("label", { text: rotulo }));
+    let campo;
+    if (tipo === "boolean") {
+      campo = el("input", { type: "checkbox" });
+    } else if (tipo === "number" || tipo === "integer") {
+      campo = el("input", { type: "number", class: "input", placeholder: String(tipo) });
+      if (tipo === "integer") campo.step = "1";
+    } else if (tipo === "multiselect" && Array.isArray(c.options)) {
+      campo = el("div", { class: "form-opts" });
+      for (const o of c.options) {
+        const id = "f_" + sid + "_" + nome + "_" + String(o).replace(/\W/g, "");
+        const cb = el("input", { type: "checkbox", id });
+        cb.onchange = () => {
+          const marcados = [...campo.querySelectorAll("input:checked")].map((x) => x.value);
+          valores[nome] = marcados;
+        };
+        campo.append(cb, el("label", { for: id, text: String(o) }));
+      }
+      valores[nome] = [];
+    } else {
+      campo = el("input", { type: "text", class: "input", placeholder: rotulo });
+    }
+    campo.oninput = () => {
+      valores[nome] = tipo === "boolean" ? campo.checked : campo.value;
+    };
+    campo.onchange = campo.oninput;
+    linha.appendChild(campo);
+    caixa.appendChild(linha);
+  }
+
+  const responder = async () => {
+    responderBtn.disabled = true;
+    try {
+      await api("reply_form", { session_id: sid, form_id: f.id, answer: valores });
+      await refreshForms(sid);
+      toast("Resposta enviada", "ok");
+    } catch (e) {
+      fail(e);
+      responderBtn.disabled = false;
+    }
+  };
+  const pular = async () => {
+    try {
+      await api("cancel_form", { session_id: sid, form_id: f.id });
+      await refreshForms(sid);
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const responderBtn = el("button", { class: "btn primary", text: "Responder" });
+  responderBtn.onclick = responder;
+
+  return el("div", { class: "form-card" },
+    el("div", { class: "form-head" },
+      icon("i-list"),
+      el("span", { class: "t", text: f.title || "O modelo fez uma pergunta" }),
+      el("span", { class: "chip muted", text: nomes.length + (nomes.length === 1 ? " campo" : " campos") })
+    ),
+    caixa,
+    el("div", { class: "form-acts" }, responderBtn, el("button", { class: "btn", text: "Pular", onclick: pular }))
+  );
+}
+
+/** Quantas mensagens sobraram com o filtro ligado. */
+function atualizarContagemBusca() {
+  const alvo = $("#mCount");
+  if (!alvo) return;
+  const q = state.msgFilter.trim().toLowerCase();
+  if (!q) {
+    alvo.textContent = "";
+    return;
+  }
+  const msgs = state.messages[state.selectedId] || [];
+  const bate = msgs.filter((m) => textoBusca(m).includes(q)).length;
+  alvo.textContent = bate + "/" + msgs.length;
+}
+
+/** Texto pesquisavel de uma mensagem: o que ela tem de legivel. */
+function textoBusca(m) {
+  const partes = [];
+  if (typeof m?.text === "string") partes.push(m.text);
+  for (const p of m?.content || []) {
+    if (!p) continue;
+    if (typeof p === "string") { partes.push(p); continue; }
+    if (typeof p.text === "string") partes.push(p.text);
+    if (typeof p.name === "string") partes.push(p.name);
+    const inp = p.state?.input;
+    if (inp && typeof inp === "object") partes.push(JSON.stringify(inp));
+    if (typeof p.state?.output === "string") partes.push(p.state.output);
+    const err = p.state?.error;
+    if (err && typeof err === "object") partes.push(err.message || "");
+  }
+  return partes.join("\n").toLowerCase();
+}
+
 function renderPermissions(sid) {
   const bar = $("#permBar");
   if (!bar) return;
@@ -2037,10 +2296,13 @@ function renderMessages() {
   // O DOM cresce sem limite numa sessao longa (centenas de mensagens) e a
   // rolagem fica pesada. Corta o historico antigo e deixa um botao para abrir.
   const LIMITE = 300;
-  const cortado = Math.max(0, msgs.length - LIMITE);
-  let visiveis = msgs;
+  // busca dentro da sessao: sem correspondencia, a mensagem nao e' desenhada
+  const q = state.msgFilter.trim().toLowerCase();
+  const base = q ? msgs.filter((m) => textoBusca(m).includes(q)) : msgs;
+  const cortado = Math.max(0, base.length - LIMITE);
+  let mostradas = base;
   if (cortado > 0) {
-    visiveis = msgs.slice(cortado);
+    mostradas = base.slice(cortado);
     const mais = el("button", { class: "clamp-btn", type: "button", text: "carregar mais " + fmtNum(cortado) + " mensagens anteriores" });
     mais.onclick = () => {
       state.limiteMsgs = (state.limiteMsgs || LIMITE) + LIMITE;
@@ -2049,11 +2311,28 @@ function renderMessages() {
     inner.appendChild(mais);
   }
 
+  if (q && !mostradas.length) {
+    inner.appendChild(el("div", { class: "empty" },
+      el("h3", { text: "Nada encontrado" }),
+      el("p", { text: 'Nenhuma mensagem desta sessao contem "' + state.msgFilter + '"' })
+    ));
+    atualizarContagemBusca();
+    return;
+  }
+  if (soRaciocinio()) {
+    inner.appendChild(el("div", { class: "mode-notice" },
+      icon("i-brain"),
+      el("span", { text: "Modo só raciocínio: edições, shells e chamadas de ferramenta estão escondidos." }),
+      el("button", { class: "btn ghost", type: "button", text: "mudar" })
+    ));
+    $(".btn", inner.lastChild).onclick = () => openSettings();
+  }
+  atualizarContagemBusca();
   const ultimoAssistente = [...msgs].reverse().find((m) => m.type === "assistant");
   const ultimoId = ultimoAssistente ? msgKey(sid, ultimoAssistente.id) : null;
 
   let lastDay = "";
-  for (const m of visiveis) {
+  for (const m of mostradas) {
     const created = m.time?.created || 0;
     const day = created ? new Date(created).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" }) : "";
     if (day && day !== lastDay) {
@@ -2648,7 +2927,9 @@ function blockTool(sid, mid, p, streaming = false) {
       icon(stl.ic, "tic"),
       el("span", { class: "tlabel", text: stl.lbl }),
       assunto ? el("span", { class: "tsubject", text: assunto, title: st.input?.path || assunto }) : null,
-      el("span", { class: "tstatus " + status, text: status === "completed" ? "ok" : status }),
+      stl.kind === "shell" && p.state?.progress?.shellID
+        ? el("span", { class: "tstatus running", text: "rodando" })
+        : el("span", { class: "tstatus " + status, text: status === "completed" ? "ok" : status }),
       streaming && status === "running" ? el("span", { class: "spin" }) : null,
       status === "error" ? el("span", { class: "hint", text: errorText(st.error, "erro") }) : null
     )
@@ -3023,6 +3304,252 @@ function garantirCamera(scroll, chave) {
   if (cab) cab.insertBefore(b, cab.lastElementChild);
   else alvo.appendChild(b);
   pintarCamera(chave);
+}
+
+/* ============================================================
+   Ambiente: contexto, MCP, permissoes salvas, config
+   Tudo o que o app nao mostrava e que muda o comportamento do modelo.
+   ============================================================ */function renderAmbiente() {
+  const root = $("#viewRoot");
+  if (!root) return;
+  root.textContent = "";
+  const view = el("div", { class: "s-view" });
+  const inner = el("div", { class: "s-view-inner" });
+  view.appendChild(inner);
+  root.appendChild(view);
+
+  const sid = state.selectedId;
+  inner.appendChild(el("div", { class: "amb-head" },
+    el("h2", { text: "Ambiente" }),
+    el("p", { class: "dim", text: "O que o OpenCode esta usando agora, e o que voce pode revogar." })
+  ));
+
+  // ---- contexto da sessao ----
+  const ctxCard = el("div", { class: "amb-card" });
+  const ctxCorpo = el("div", { class: "amb-body" }, el("p", { class: "dim", text: "carregando…" }));
+  ctxCard.append(
+    el("div", { class: "amb-title" }, icon("i-compact"), el("span", { text: "Contexto da sessão" }),
+      el("button", { class: "btn ghost", text: "atualizar", type: "button" })),
+    ctxCorpo
+  );
+  $("button", ctxCard).onclick = () => carregarContexto(sid, ctxCorpo);
+  inner.appendChild(ctxCard);
+  carregarContexto(sid, ctxCorpo);
+
+  // ---- MCP ----
+  const mcpCard = el("div", { class: "amb-card" });
+  const mcpCorpo = el("div", { class: "amb-body" }, el("p", { class: "dim", text: "carregando…" }));
+  mcpCard.append(
+    el("div", { class: "amb-title" }, icon("i-plug"), el("span", { text: "Servidores MCP" })),
+    mcpCorpo
+  );
+  inner.appendChild(mcpCard);
+  carregarMcp(mcpCorpo);
+
+  // ---- permissoes salvas ----
+  const permCard = el("div", { class: "amb-card" });
+  const permCorpo = el("div", { class: "amb-body" }, el("p", { class: "dim", text: "carregando…" }));
+  permCard.append(
+    el("div", { class: "amb-title" }, icon("i-check"), el("span", { text: "Permissões salvas" }),
+      el("span", { class: "dim", text: "o que voce aprovou com Sempre" })),
+    permCorpo
+  );
+  inner.appendChild(permCard);
+  carregarPermissoes(permCorpo);
+
+  // ---- config ----
+  const cfgCard = el("div", { class: "amb-card" });
+  const cfgCorpo = el("div", { class: "amb-body" }, el("p", { class: "dim", text: "carregando…" }));
+  cfgCard.append(
+    el("div", { class: "amb-title" }, icon("i-cpu"), el("span", { text: "Configuração" })),
+    cfgCorpo
+  );
+  inner.appendChild(cfgCard);
+  carregarConfig(cfgCorpo);
+}
+
+async function carregarContexto(sid, alvo) {
+  if (!sid) {
+    alvo.textContent = "";
+    alvo.appendChild(el("p", { class: "dim", text: "Selecione uma sessão." }));
+    return;
+  }
+  alvo.textContent = "";
+  alvo.appendChild(el("p", { class: "dim", text: "lendo…" }));
+  try {
+    const r = await api("session_context", { session_id: sid });
+    const itens = r?.data || [];
+    // o contexto tem milhares de itens e Megabytes: mostrar a composicao e o
+    // resumo da compactacao, nao o despejo
+    const porTipo = {};
+    for (const it of itens) porTipo[it.type] = (porTipo[it.type] || 0) + 1;
+    const comp = itens.find((x) => x.type === "compaction" && x.status === "completed");
+    const tokens = itens.reduce((s, x) => s + (x?.tokens?.total || 0), 0);
+    const custo = itens.reduce((s, x) => s + (x?.cost || 0), 0);
+
+    alvo.textContent = "";
+    alvo.appendChild(el("div", { class: "amb-stats" },
+      el("span", { class: "chip muted", text: itens.length + " itens" }),
+      tokens ? el("span", { class: "chip muted", text: fmtNum(tokens) + " tokens" }) : null,
+      custo ? el("span", { class: "chip muted", text: "$" + custo.toFixed(4) }) : null,
+      comp ? el("span", { class: "chip add", text: "compactado" }) : null
+    ));
+
+    const tipos = el("div", { class: "amb-tipos" });
+    for (const [t, q] of Object.entries(porTipo).sort((a, b) => b[1] - a[1])) {
+      tipos.appendChild(el("span", { class: "chip", title: t, text: t + " " + q }));
+    }
+    alvo.appendChild(tipos);
+
+    if (comp?.summary) {
+      const bloco = el("details", { class: "blk" });
+      const linhas = comp.summary.split("\n").length;
+      bloco.appendChild(el("summary", {},
+        icon("i-chev", "caret"),
+        el("span", { class: "t", text: "resumo da compactação" }),
+        el("span", { class: "dim", text: linhas + " linhas" })
+      ));
+      const pre = el("div", { class: "code" }, el("div", { class: "code-scroll" }));
+      for (const l of comp.summary.split("\n").slice(0, 200)) {
+        pre.firstChild.appendChild(el("div", { class: "ln" }, el("span", { class: "tx", text: l })));
+      }
+      bloco.appendChild(pre);
+      alvo.appendChild(bloco);
+    }
+
+    const perguntas = itens.filter((x) => x.type === "user");
+    if (perguntas.length) {
+      const qtd = perguntas.length;
+      alvo.appendChild(el("div", { class: "amb-sub",
+        text: qtd === 1 ? "Sua 1 mensagem neste contexto:" : "Suas " + qtd + " mensagens neste contexto:" }));
+      const lista = el("div", { class: "list-box" });
+      for (const u of perguntas.slice(-12)) {
+        // no contexto o item do usuario tem `text` direto — content[] e o
+        // formato das mensagens, nao deste endpoint
+        const txt = String(u.text || (u.content || []).filter((c) => c?.type === "text").map((c) => c.text || "").join(" ") || "").trim();
+        const trecho = txt.slice(0, 160) + (txt.length > 160 ? "…" : "");
+        lista.appendChild(el("div", { class: "diff-row" },
+          el("span", { class: "f", text: trecho || "(sem texto)", title: txt })
+        ));
+      }
+      alvo.appendChild(lista);
+    }
+  } catch (e) {
+    alvo.textContent = "";
+    alvo.appendChild(el("p", { class: "dim", text: "não foi possível ler o contexto: " + errorText(e, "") }));
+  }
+}
+
+async function carregarMcp(alvo) {
+  try {
+    const r = await api("mcp_servers");
+    const servidores = Object.entries(r?.data || {});
+    alvo.textContent = "";
+    if (!servidores.length) {
+      alvo.appendChild(el("p", { class: "dim", text: "Nenhum servidor MCP conectado." }));
+      return;
+    }
+    const lista = el("div", { class: "list-box" });
+    for (const [nome, info] of servidores) {
+      const estado = info?.status || info?.state || "?";
+      lista.appendChild(el("div", { class: "diff-row" },
+        el("span", { class: "f", text: nome }),
+        info?.error ? el("span", { class: "tag err", text: info.error }) : el("span", { class: "tag", text: String(estado) })
+      ));
+    }
+    alvo.appendChild(lista);
+  } catch (e) {
+    alvo.textContent = "";
+    alvo.appendChild(el("p", { class: "dim", text: "indisponível: " + errorText(e, "") }));
+  }
+}
+
+async function carregarPermissoes(alvo) {
+  try {
+    const r = await api("saved_permissions");
+    const regras = r?.data || [];
+    alvo.textContent = "";
+    if (!regras.length) {
+      alvo.appendChild(el("p", { class: "dim", text: "Nenhuma regra salva.Quando você responde Sempre num pedido de permissão, ela aparece aqui." }));
+      return;
+    }
+    const lista = el("div", { class: "list-box" });
+    for (const regra of regras) {
+      const id = regra.id || regra.key;
+      const nome = regra.tool || regra.pattern || regra.name || id;
+      const linha = el("div", { class: "diff-row" },
+        el("span", { class: "f", text: typeof nome === "string" ? nome : JSON.stringify(nome) }),
+        el("span", { class: "tag", text: regra.effect || regra.decision || "" })
+      );
+      const x = el("button", { class: "btn ghost", text: "revogar", type: "button", title: "Revogar esta regra" });
+      x.onclick = async () => {
+        x.disabled = true;
+        try {
+          await api("delete_saved_permission", { id: String(id) });
+          toast("Regra revogada", "ok");
+          carregarPermissoes(alvo);
+        } catch (e) {
+          fail(e);
+          x.disabled = false;
+        }
+      };
+      linha.appendChild(x);
+      lista.appendChild(linha);
+    }
+    alvo.appendChild(lista);
+  } catch (e) {
+    alvo.textContent = "";
+    alvo.appendChild(el("p", { class: "dim", text: "indisponível: " + errorText(e, "") }));
+  }
+}
+
+// O /api/config devolve os documentos de configuracao com os valores
+// literais — inclusive chave de API. Este painel so mostra nomes de secao,
+// nunca valor, e ainda passa pelo redator.
+const SEGREDO = /(key|token|secret|password|senha|credential|auth)/i;
+
+function seguro(str) {
+  const s = String(str || "");
+  if (!SEGREDO.test(s)) return s;
+  return s.replace(/[A-Za-z0-9_\-]{8,}/g, "***");
+}
+
+async function carregarConfig(alvo) {
+  try {
+    const r = await api("app_config");
+    alvo.textContent = "";
+    // a resposta e { data: [ {type, path, info}, ... ] }
+    const docs = Array.isArray(r?.data) ? r.data : r?.data ? [r.data] : [];
+    if (!docs.length) {
+      alvo.appendChild(el("p", { class: "dim", text: "Nenhuma configuração publicada neste diretório." }));
+      return;
+    }
+    for (const doc of docs) {
+      const info = doc?.info || {};
+      const chaves = Object.keys(info).filter((k) => k !== "$schema");
+      alvo.appendChild(el("div", { class: "amb-sub", text: doc.path || doc.type || "config" }));
+      if (!chaves.length) {
+        alvo.appendChild(el("p", { class: "dim", text: "documento vazio." }));
+        continue;
+      }
+      const lista = el("div", { class: "list-box" });
+      for (const k of chaves) {
+        const v = info[k];
+        // so os nomes: exibir o valor aqui exporia segredo do config
+        const nomes = v && typeof v === "object" && !Array.isArray(v)
+          ? Object.keys(v).join(", ")
+          : Array.isArray(v) ? v.length + " item(ns)" : v;
+        lista.appendChild(el("div", { class: "diff-row" },
+          el("span", { class: "f", text: k }),
+          el("span", { class: "tag", text: seguro(nomes).slice(0, 70), title: nomes })
+        ));
+      }
+      alvo.appendChild(lista);
+    }
+  } catch (e) {
+    alvo.textContent = "";
+    alvo.appendChild(el("p", { class: "dim", text: "indisponível: " + errorText(e, "") }));
+  }
 }
 
 /* ============================================================
@@ -3734,12 +4261,15 @@ function renderEventos() {
   };
 
   const status = el("div", { class: "status", id: "evStatus" });
+  const ignorados = el("div", { class: "e-ignored", id: "evIgnorados" });
 
   view.appendChild(el("div", { class: "e-bar" }, search, pause, clear, status));
+  view.appendChild(ignorados);
   view.appendChild(el("div", { class: "e-list", id: "evList" }));
   root.appendChild(view);
   updateEventStatus();
   renderEventList();
+  atualizarIgnorados();
 }
 
 function evClass(t) {
@@ -3749,6 +4279,39 @@ function evClass(t) {
   if (t.includes("error")) return "t-err";
   if (t.includes("session.created") || t.includes("session.updated") || t.includes("session.idle")) return "t-session";
   return "";
+}
+
+/** Tipos de evento que o app nao trata. Antes caiam num break silencioso. */
+function atualizarIgnorados() {
+  const alvo = document.getElementById("evIgnorados");
+  if (!alvo) return;
+  const tipos = Object.entries(state.ignorados).sort((a, b) => b[1].n - a[1].n);
+  alvo.textContent = "";
+  if (!tipos.length) {
+    alvo.appendChild(el("span", { class: "dim", text: "todos os eventos recebidos são tratados" }));
+    return;
+  }
+  alvo.appendChild(el("span", { class: "warn-ink", text: tipos.length + " tipo(s) sem tratamento:" }));
+  for (const [tp, info] of tipos) {
+    const chip = el("button", { class: "chip muted", type: "button", title: "Ver o que chegou", text: tp + " ×" + info.n });
+    chip.onclick = () => abrirAmostra(tp, info.amostra);
+    alvo.appendChild(chip);
+  }
+}
+
+/** Mostra o JSON cru de um evento que o app nao trata. */
+function abrirAmostra(tipo, amostra) {
+  const linhas = String(JSON.stringify(amostra, null, 1) || "sem dados").split("\n");
+  openModal({
+    title: "Evento sem tratamento",
+    subtitle: tipo,
+    body: el("div", { class: "code" }, el("div", { class: "code-scroll" },
+      ...linhas.map((l, i) =>
+        el("div", { class: "ln" }, el("span", { class: "n", text: String(i + 1) }), el("span", { class: "tx", text: l }))
+      )
+    )),
+    actions: [{ label: "Fechar", primary: true, run: () => {} }],
+  });
 }
 
 function updateEventStatus() {

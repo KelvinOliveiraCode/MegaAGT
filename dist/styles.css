@@ -1135,3 +1135,87 @@ body.soltando::after {
 
 /* com a câmera travada o fim da lista pode respirar */
 .msg-scroll.cam-travada { scroll-behavior: auto; }
+
+/* ---------------- ambiente (contexto, MCP, permissoes, config) ---------------- */
+.amb-head { margin-bottom: var(--sp-4); }
+.amb-head h2 { font-size: var(--t-lg); font-weight: 650; }
+.amb-head p { font-size: var(--t-sm); margin-top: 3px; }
+.amb-card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md); margin-bottom: var(--sp-3); overflow: hidden;
+}
+.amb-title {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+  font-size: var(--t-sm); font-weight: 600; color: var(--ink-2);
+  background: var(--raised);
+}
+.amb-title svg { width: 14px; height: 14px; color: var(--accent); }
+.amb-title .btn { margin-left: auto; }
+.amb-title .dim { font-weight: 400; font-size: var(--t-xs); }
+.amb-body { padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
+.amb-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+.amb-tipos { display: flex; gap: 5px; flex-wrap: wrap; }
+.amb-tipos .chip { font-family: var(--mono); font-weight: 400; }
+.amb-sub { font-size: var(--t-xs); color: var(--muted); margin-top: var(--sp-2); }
+.amb-body .list-box { max-height: 300px; }
+.amb-body > .blk { margin: 0; }
+
+/* eventos sem tratamento */
+.e-ignored {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 7px 11px; border-bottom: 1px solid var(--line);
+  font-size: var(--t-xs); color: var(--ink-2); background: var(--surface);
+}
+.e-ignored .chip { font-family: var(--mono); font-weight: 400; font-size: 10px; }
+.warn-ink { color: var(--warn); font-weight: 600; }
+
+/* formularios do modelo */
+#formBar { padding: var(--sp-2) var(--sp-5) 0; }
+#formBar.hidden { display: none; }
+.form-card {
+  margin-bottom: var(--sp-2); padding: var(--sp-3);
+  border: 1px solid var(--accent); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.form-head { display: flex; align-items: center; gap: 8px; margin-bottom: var(--sp-2); }
+.form-head svg { width: 14px; height: 14px; color: var(--accent); }
+.form-head .t { font-weight: 600; color: var(--ink); }
+.form-fields { display: flex; flex-direction: column; gap: var(--sp-2); }
+.form-fields .field label { display: block; font-size: var(--t-xs); color: var(--muted); margin-bottom: 3px; }
+.form-opts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.form-opts label { font-size: var(--t-sm); color: var(--ink-2); }
+.form-acts { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
+
+/* busca dentro da sessao */
+.m-search {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px var(--sp-4); margin: 0 var(--sp-4) var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.m-search svg { width: 13px; height: 13px; color: var(--muted); flex: none; }
+.m-search input {
+  flex: 1; min-width: 0; background: none; border: none; outline: none;
+  font-size: var(--t-sm); color: var(--ink);
+}
+.m-search input::placeholder { color: var(--muted); }
+.m-search .m-count { font-size: var(--t-xs); color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.m-search .btn.ghost { flex: none; padding: 1px 7px; font-size: var(--t-xs); }
+/* vazia: some com a propria altura, para nao comer o chat */
+.m-search.vazia { padding-top: 0; padding-bottom: 0; height: 0; border: none; overflow: hidden; margin-bottom: var(--sp-2); }
+.m-search:not(.vazia):focus-within { border-color: var(--accent); }
+
+/* aviso de modo ativo: sem isto a sessao parece vazia */
+.mode-notice {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: 7px 11px; margin-bottom: var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--think-ink) 35%, transparent);
+  border-radius: var(--r-md); background: var(--think-bg);
+  font-size: var(--t-xs); color: var(--think-ink);
+}
+.mode-notice svg { width: 14px; height: 14px; flex: none; }
+.mode-notice .btn { margin-left: auto; }
+
+#retryBar { padding: var(--sp-2) var(--sp-5) 0; }
+#retryBar.hidden { display: none; }
