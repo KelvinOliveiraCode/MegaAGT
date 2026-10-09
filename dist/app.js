@@ -131,6 +131,11 @@ const state = {
   // sumia no meio da frase.
   forms: {},      // sid -> formularios esperando resposta
   retry: {},      // sid -> { attempt, at, error } enquanto o provedor reinsiste
+  // sid -> [childID] dos subagentes que ja' reportaram de volta pela inbox.
+  // Fica vazio na maior parte do tempo: so' os eventos session.inbox.* o
+  // tocam, e por isso a falta desta linha passou despercebida ate' um
+  // subagente de fato responder — e ai estourava em handleEvent.
+  subsRodando: {},
   formasVistas: new Set(),
   msgFilter: "",
   ambiente: null,
@@ -898,6 +903,16 @@ function clearLive(sid, mid) {
 
 const refetchTimers = {};
 let _subsTimer = null;
+/**
+ * Cache de nos por cartao do Paralelo.
+ *
+ * A chave e' o ELEMENTO, nao a sessao. Quando era por sessao o cache
+ * sobrevivia a renderParalelo(), que destroi e refaz todos os cartoes: o
+ * cartao novo nascia vazio, o cache antigo dizia "nada mudou" e o
+ * renderParBody saia sem desenhar nada — 1390 mensagens viraram zero de uma
+ * vez so'. Com WeakMap cada cartao tem o seu, eSome quando o no sai de cena.
+ */
+const parCache = new WeakMap();
 const refetchTries = {};
 
 /**
@@ -1915,15 +1930,22 @@ function setBusy(sid, valor) {
 /** Faixa animada no corpo da conversa: "o modelo esta trabalhando". */
 function paintWorking(node, sid) {
   if (!node) return;
-  node.querySelector(".working")?.remove();
-  if (!isBusy(sid)) return;
-  const s = sessionById(sid);
-  node.appendChild(
-    el("div", { class: "working" },
-      el("span", { class: "working-dots" }, el("i"), el("i"), el("i")),
-      el("span", { class: "working-txt", text: (s && s.agent ? s.agent : "") + " trabalhando" })
-    )
+  const atual = node.querySelector(".working");
+  const txt = (sessionById(sid)?.agent || "") + " trabalhando";
+  if (!isBusy(sid)) {
+    // some so' se existir: remover e recriar este elemento a cada render
+    // deslocava o texto do cartao
+    atual?.remove();
+    return;
+  }
+  if (atual && atual.__txt === txt) return;
+  atual?.remove();
+  const faixa = el("div", { class: "working" },
+    el("span", { class: "working-dots" }, el("i"), el("i"), el("i")),
+    el("span", { class: "working-txt", text: txt })
   );
+  faixa.__txt = txt;
+  node.appendChild(faixa);
 }
 
 /** Marca o card do Paralelo como ocupado e liga/desliga o botao de parar. */
@@ -4212,10 +4234,21 @@ function renderParalelo() {
     grid.appendChild(card);
     makeCardDraggable(card, sid);
 
+    // Re-resolve o cartao pelo sid: entre o clique e a resposta do servidor o
+    // grid pode ter sido reconstruido (outro pin, arraste, timer), e o no
+    // guardado no fecho fica solto — ai o append ia para um elemento que nao
+    // esta na tela e o cartao ficava vazio para sempre. Foi assim que tres
+    // sessoes fixadas apareceram sem nenhuma mensagem.
+    const cardVivo = () => document.querySelector('.p-card[data-sid="' + sid + '"]');
     refreshMessages(sid).then(() => {
-      renderParBody(card, sid);
-      paintCardBusy(card, sid);
+      const alvo = cardVivo() || card;
+      renderParBody(alvo, sid);
+      paintCardBusy(alvo, sid);
       pintarSubs();
+    });
+    requestAnimationFrame(() => {
+      const alvo = cardVivo();
+      if (alvo) { renderParBody(alvo, sid); pintarSubs(); }
     });
 
     if (focoAntes.has(sid)) {
@@ -4239,15 +4272,28 @@ function renderParalelo() {
       const host = cardEl.querySelector(".p-subs");
       if (!host) continue;
       const painel = subsPainel(cardEl.dataset.sid, true);
-      if (!painel) { host.textContent = ""; continue; }
-      // so troca quando mudou, para nao brigar com o clique
-      const agora = painel.querySelectorAll(".subs-item").length;
-      if (host.childElementCount !== 1 || host.firstElementChild.childElementCount !== 1 + agora) {
-        host.textContent = "";
-        host.appendChild(painel);
-      }
+      const ids = painel ? [...painel.querySelectorAll(".subs-item")].map((x) => x.textContent).join("|") : "";
+      // A comparacao antiga olhava childElementCount, que e' 2 aconteca o que
+      // acontecer (cabecalho + lista): com dois ou mais subagentes a conta
+      // nunca fechava e o painel era refeito a cada 2 s,reiniciando a animacao
+      // de loading e deslocando o texto. Assinatura pelo conteudo resolve.
+      if (host.__subsIds === ids) continue;
+      host.__subsIds = ids;
+      host.textContent = "";
+      if (painel) host.appendChild(painel);
     }
   }, 2000);
+}
+
+/**
+ * Assinatura barata do historico: id + quanto conteudo cada mensagem tem.
+ * Nao entra o texto em si — so precisa detectar mudanca, e comparar tamanho
+ * basta. O que muda a cada token e' o overlay live, que e' tratado a parte.
+ */
+function parSig(visiveis) {
+  let s = "";
+  for (const m of visiveis) s += (m.id || "") + ":" + ((m.content && m.content.length) || 0) + ";";
+  return s;
 }
 
 function renderParBody(card, sid) {
@@ -4255,33 +4301,93 @@ function renderParBody(card, sid) {
   if (!body) return;
   const msgs = state.messages[sid] || [];
   const inner = $(".msg-inner", body) || body;
-  inner.textContent = "";
+
   // O cartao usava um -40 fixo, sem saida: numa sessao longa as chamadas de
   // ferramenta mais antigas (os `$ cd`, os `wrote`) simplesmente nao
   // apareciam. Agora vale o mesmo limite do Foco, com o mesmo botao.
   const LIMITE = state.limiteMsgs || 300;
   const cortado = Math.max(0, msgs.length - LIMITE);
   const visiveis = cortado > 0 ? msgs.slice(cortado) : msgs;
-  if (cortado > 0) {
-    const mais = el("button", { class: "clamp-btn", type: "button", text: "carregar mais " + fmtNum(cortado) });
-    mais.onclick = () => {
-      state.limiteMsgs = (state.limiteMsgs || LIMITE) + LIMITE;
-      store.set("limiteMsgs", state.limiteMsgs);
-      renderParBody(card, sid);
-    };
-    inner.appendChild(mais);
+
+  const cache = parCache.get(card) || { nos: new Map(), ids: [], sig: "", live: null, liveIds: undefined };
+  parCache.set(card, cache);
+  const sig = parSig(visiveis);
+  const igual = cache.sig === sig && cache.ids.length === visiveis.length;
+  // Cinto de seguranca: se o elemento nao tem nenhum filho mas existem
+  // mensagens para desenhar, o cache esta mentindo (cartao refeito, ou a
+  // primeira pintura ainda nao aconteceu). Redesenha inteiro.
+  const domVazio = inner.childElementCount === 0 && visiveis.length > 0;
+  // so' cresceu no fim: o caso do streaming, que e' o mais comum
+  const soCresceu =
+    !igual &&
+    cache.ids.length > 0 &&
+    visiveis.length >= cache.ids.length &&
+    !domVazio &&
+    cache.ids.every((id, i) => visiveis[i] && visiveis[i].id === id);
+
+  if (igual && !domVazio) {
+    // NADA mudou no historico: nao encosta no DOM. E' esta saida que faz o
+    // cartao parar de piscar — e tambem evita o applyClamps, que le
+    // scrollHeight de cada bloco e forca reflow em todos eles.
+    pinarLivePar(inner, cache, sid, msgs);
+    preservarRolagem(body, chaveRolagem("par", sid));
+    return;
   }
-  for (const m of visiveis) inner.appendChild(messageNode(sid, m));
-  for (const [mid, live] of state.live[sid] || []) {
-    if (!msgs.some((m) => m.id === mid)) {
-      inner.appendChild(messageNode(sid, { id: mid, type: "assistant", content: [], time: { created: Date.now() } }, live));
+
+  if (soCresceu) {
+    // acrescenta so' o que chegou, sem esvaziar nada
+    for (let i = cache.ids.length; i < visiveis.length; i++) {
+      const no = messageNode(sid, visiveis[i]);
+      cache.nos.set(visiveis[i].id, no);
+      inner.appendChild(no);
+    }
+  } else {
+    inner.textContent = "";
+    cache.nos.clear();
+    if (cortado > 0) {
+      const mais = el("button", { class: "clamp-btn", type: "button", text: "carregar mais " + fmtNum(cortado) });
+      mais.onclick = () => {
+        state.limiteMsgs = (state.limiteMsgs || LIMITE) + LIMITE;
+        store.set("limiteMsgs", state.limiteMsgs);
+        renderParBody(card, sid);
+      };
+      inner.appendChild(mais);
+    }
+    for (const m of visiveis) {
+      const no = messageNode(sid, m);
+      cache.nos.set(m.id, no);
+      inner.appendChild(no);
     }
   }
+  cache.ids = visiveis.map((m) => m.id);
+  cache.sig = sig;
+
+  pinarLivePar(inner, cache, sid, msgs);
   paintWorking(body, sid);
   // a ultima resposta do cartao tambem nao e' recolhida
-  const ultimo = visiveis.reverse().find((m) => m.type === "assistant");
-  applyClamps(inner, ultimo ? msgKey(sid, ultimo.id) : null);
+  const ultimo = visiveis.filter((m) => m.type === "assistant").pop();
+  if (ultimo) applyClamps(inner, msgKey(sid, ultimo.id));
   preservarRolagem(body, chaveRolagem("par", sid));
+}
+
+/**
+ * Overlay live (a mensagem que ainda esta sendo gerada). Atualiza so' ele:
+ * reconstruir o cartao inteiro a cada token era o que fazia a rolagem
+ * brigar com o conteudo novo.
+ */
+function pinarLivePar(inner, cache, sid, msgs) {
+  const vivos = [...(state.live[sid] || [])].filter(([mid]) => !msgs.some((m) => m.id === mid));
+  const ids = vivos.map(([mid]) => mid).join(",");
+  if (cache.liveIds === ids && cache.live) return;
+  cache.live?.remove();
+  cache.live = null;
+  cache.liveIds = ids;
+  if (!vivos.length) return;
+  for (const [mid, live] of vivos) {
+    const no = messageNode(sid, { id: mid, type: "assistant", content: [], time: { created: Date.now() } }, live);
+    inner.appendChild(no);
+    cache.live = no;
+  }
 }
 
 /* ============================================================
