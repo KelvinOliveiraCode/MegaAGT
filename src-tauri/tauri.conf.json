@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OpenCode Hub",
+  "productName": "MegaAGT",
   "version": "1.0.0",
   "identifier": "dev.opencode.hub",
   "build": {
@@ -9,7 +9,7 @@
   "app": {
     "windows": [
       {
-        "title": "OpenCode Hub",
+        "title": "MegaAGT",
         "width": 1440,
         "height": 900,
         "minWidth": 960,

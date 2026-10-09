@@ -1,9 +1,9 @@
-# OpenCode Hub — contexto do projeto
+# MegaAGT — contexto do projeto
 
 Documento de referência para quem vai **manter ou estender** este app.
 Descreve o que existe, por que existe assim, e onde mexer em cada coisa.
 
-> Se você só quiser usar o app: abra `OpenCode Hub.exe`. Ele sobe o servidor
+> Se você só quiser usar o app: abra `MegaAGT.exe`. Ele sobe o servidor
 > sozinho. Veja [Servidor](#servidor-o-app-sobe-o-servidor-sozinho).
 
 ---
@@ -33,7 +33,7 @@ npm run build    # release (~90 s)
 Depois de `build`, **copie** o executável para a área de trabalho:
 
 ```bash
-Copy-Item src-tauri\target\release\opencode-hub.exe "C:\Users\Kelvin\Desktop\OpenCode Hub.exe" -Force
+Copy-Item src-tauri\target\release\opencode-hub.exe "C:\Users\Kelvin\Desktop\MegaAGT.exe" -Force
 ```
 
 O `.exe` fica travado enquanto o app está rodando — **feche o Hub antes de
@@ -43,7 +43,7 @@ copiar**, senão o `Copy-Item` falha.
 
 ```powershell
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
-Start-Process "C:\Users\Kelvin\Desktop\OpenCode Hub.exe"
+Start-Process "C:\Users\Kelvin\Desktop\MegaAGT.exe"
 ```
 
 Só para testes automatizados. Não use no dia a dia.
@@ -106,7 +106,7 @@ OpenCode uma vez pelo terminal.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  OpenCode Hub.exe (Tauri 2)                              │
+│  MegaAGT.exe (Tauri 2)                              │
 │                                                          │
 │  dist/index.html ─┬─ sprite SVG + esqueleto              │
 │                   ├─ styles.css   (tokens, temas)        │

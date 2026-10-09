@@ -4,10 +4,18 @@
       <stop offset="0" stop-color="#1b2138"/>
       <stop offset="1" stop-color="#0b0e18"/>
     </linearGradient>
-    <linearGradient id="bolt" x1="0.25" y1="0" x2="0.75" y2="1">
-      <stop offset="0" stop-color="#7fd4ff"/>
-      <stop offset="0.55" stop-color="#4aa8f0"/>
-      <stop offset="1" stop-color="#6b7cff"/>
+    <linearGradient id="corpo" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#eef2ff"/>
+      <stop offset="0.5" stop-color="#b9c4e8"/>
+      <stop offset="1" stop-color="#8a97c4"/>
+    </linearGradient>
+    <linearGradient id="olho" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fe6ff"/>
+      <stop offset="1" stop-color="#3f8fe0"/>
+    </linearGradient>
+    <linearGradient id="antena" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9fe8ff"/>
+      <stop offset="1" stop-color="#5a7bff"/>
     </linearGradient>
   </defs>
 
@@ -15,8 +23,40 @@
   <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#bg)"/>
   <rect x="32.5" y="32.5" width="959" height="959" rx="216" fill="none" stroke="#3d4a72" stroke-width="3"/>
 
-  <!-- raio: mesmo caminho usado na interface, nao espelhado -->
-  <g transform="translate(128 128) scale(32)">
-    <path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z" fill="url(#bolt)"/>
+  <!-- robozinho: cabeca, orelhas, antena, olhos e boca -->
+  <!-- tronco/pescoço -->
+  <rect x="432" y="690" width="160" height="58" rx="18" fill="url(#corpo)"/>
+  <rect x="392" y="742" width="240" height="96" rx="34" fill="url(#corpo)"/>
+  <!-- peito com um brilho -->
+  <circle cx="512" cy="792" r="26" fill="url(#olho)" opacity=".9"/>
+
+  <!-- orelhas -->
+  <rect x="300" y="430" width="66" height="150" rx="30" fill="url(#corpo)"/>
+  <rect x="658" y="430" width="66" height="150" rx="30" fill="url(#corpo)"/>
+
+  <!-- cabeça -->
+  <rect x="318" y="256" width="388" height="330" rx="112" fill="url(#corpo)"/>
+  <!-- viseira (faixa superior da cabeça) -->
+  <rect x="318" y="256" width="388" height="96" rx="112" fill="#0f1424" opacity=".18"/>
+
+  <!-- antena -->
+  <rect x="505" y="150" width="14" height="112" rx="7" fill="url(#corpo)"/>
+  <circle cx="512" cy="140" r="34" fill="url(#antena)"/>
+
+  <!-- olhos: no lugar dos raios -->
+  <g>
+    <rect x="378" y="410" width="112" height="118" rx="46" fill="#0d1220"/>
+    <rect x="534" y="410" width="112" height="118" rx="46" fill="#0d1220"/>
+    <circle cx="428" cy="462" r="34" fill="url(#olho)"/>
+    <circle cx="594" cy="462" r="34" fill="url(#olho)"/>
+    <circle cx="416" cy="450" r="11" fill="#ffffff" opacity=".85"/>
+    <circle cx="582" cy="450" r="11" fill="#ffffff" opacity=".85"/>
+  </g>
+
+  <!-- boca: grade de linhas -->
+  <g fill="#0d1220" opacity=".8">
+    <rect x="404" y="546" width="216" height="14" rx="7"/>
+    <rect x="430" y="512" width="164" height="14" rx="7"/>
+    <rect x="430" y="512" width="164" height="14" rx="7"/>
   </g>
 </svg>

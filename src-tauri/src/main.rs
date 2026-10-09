@@ -1370,5 +1370,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("erro ao executar o OpenCode Hub");
+        .expect("erro ao executar o MegaAGT");
 }

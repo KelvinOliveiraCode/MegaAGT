@@ -1,4 +1,4 @@
-# OpenCode Hub
+# MegaAGT
 
 App desktop (Tauri v2 + Rust) para o **OpenCode CLI v2**: todas as sessões em um só lugar, conversa ao vivo com o serviço, subagentes, raciocínio do modelo, diretório de trabalho e exportação.
 
@@ -174,6 +174,12 @@ computador reiniciou, por exemplo), a leitura passa e o app apenas tenta
 reconectar. Aí o indicador de conexão mostra `offline — clique para iniciar` e é
 preciso um clique — ou abrir o CLI uma vez.
 
+## Integração com o Hermes
+
+**[HERMES.md](./HERMES.md)** é o plano (não implementado) para uma segunda aba
+rodando o Hermes Agent, com o que eu verifiquei no CLI instalado e o passo a
+passo menor primeiro.
+
 ## Documentação
 
 **[CONTEXTO.md](./CONTEXTO.md)** é o documento de manutenção: arquitetura,
@@ -213,7 +219,7 @@ Gera `src-tauri\target\release\opencode-hub.exe` (~1 min 30). Depois **copie**
 para a área de trabalho — o `.exe` fica travado enquanto o app está rodando:
 
 ```powershell
-Copy-Item src-tauri\target\release\opencode-hub.exe "C:\Users\Kelvin\Desktop\OpenCode Hub.exe" -Force
+Copy-Item src-tauri\target\release\opencode-hub.exe "C:\Users\Kelvin\Desktop\MegaAGT.exe" -Force
 ```
 
 O ícone sai de `app-icon.svg`. Depois de mudar o ícone:
