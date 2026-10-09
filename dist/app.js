@@ -1,5 +1,5 @@
 /* ============================================================
-   OpenCode Hub — frontend
+   MegaAGT — frontend
    Contrato de dados (OpenCode v2):
      sessão  { id, title, agent, model{providerID,id,variant}, parentID, outcome,
                cost, tokens{input,output,reasoning,cache{read,write}},
@@ -2407,7 +2407,12 @@ function renderMessages() {
 
   // O DOM cresce sem limite numa sessao longa (centenas de mensagens) e a
   // rolagem fica pesada. Corta o historico antigo e deixa um botao para abrir.
+  //
+  // O limite e' persistido: sem isso, o que voce carregou com "carregar mais"
+  // sumia ao fechar e abrir o app — que e' exatamente a bronca de "mensagens
+  // de raciocinio e comandos que somem".
   const LIMITE = 300;
+  state.limiteMsgs = state.limiteMsgs || store.get("limiteMsgs", LIMITE);
   // busca dentro da sessao: sem correspondencia, a mensagem nao e' desenhada
   const q = state.msgFilter.trim().toLowerCase();
   const base = q ? msgs.filter((m) => textoBusca(m).includes(q)) : msgs;
@@ -2418,6 +2423,7 @@ function renderMessages() {
     const mais = el("button", { class: "clamp-btn", type: "button", text: "carregar mais " + fmtNum(cortado) + " mensagens anteriores" });
     mais.onclick = () => {
       state.limiteMsgs = (state.limiteMsgs || LIMITE) + LIMITE;
+      store.set("limiteMsgs", state.limiteMsgs);
       renderMessages();
     };
     inner.appendChild(mais);
@@ -2579,8 +2585,14 @@ function metaNote(m) {
   const line = el("div", { class: "msg-note" });
   const add = (t) => line.append(el("span", { class: "tline" }), el("span", { text: t }));
   switch (m.type) {
+    // Terminou bem e' o caso normal: nao merece uma linha no meio da
+    // conversa. O que merece e' a saida anormal, que passava batido.
     case "idle":
-      line.append(icon("i-check"), el("span", { text: `ocioso · ${m.outcome || "—"}` }));
+      if (m.outcome && m.outcome !== "succeeded") {
+        line.append(icon("i-alert"), el("span", { text: "rodada encerrada: " + m.outcome }));
+      } else {
+        line.classList.add("hidden");
+      }
       break;
     case "system":
     case "synthetic":
@@ -2890,7 +2902,7 @@ const TOOL_STYLE = {
   write: { ic: "i-file-plus", lbl: "criar", kind: "write" },
   create: { ic: "i-file-plus", lbl: "criar", kind: "write" },
   read: { ic: "i-file", lbl: "ler", kind: "read" },
-  shell: { ic: "i-term", lbl: "shell", kind: "shell" },
+  shell: { ic: "i-term", lbl: "$", kind: "shell" },
   bash: { ic: "i-term", lbl: "shell", kind: "shell" },
   exec: { ic: "i-term", lbl: "shell", kind: "shell" },
   grep: { ic: "i-search", lbl: "buscar", kind: "grep" },
@@ -2913,6 +2925,30 @@ function trimMid(s, max = 62) {
   if (s.length <= max) return s;
   const corte = Math.ceil((s.length - max + 1) / 2);
   return "…" + s.slice(corte, corte + max - 1);
+}
+
+/**
+ * A linha de resultado que o OpenCode CLI imprime para cada ferramenta.
+ * Vive no `state.content` da chamada; a UI propria do app a descartava.
+ * Devolve so a primeira linha, que e' a que importa — o resto as vezes e'
+ * o conteudo inteiro do arquivo.
+ */
+function toolResultLine(st, nome) {
+  // So vale para as ferramentas cuja saida comeca com uma linha de resultado
+  // de verdade. Para shell e read a primeira linha e' saida de comando ou
+  // codigo do arquivo — isso vai no corpo, nao no cabecalho (o comando e o
+  // caminho ja' estao no assunto). Para websearch/webfetch e' markdown do
+  // resultado, que so' produz ruido.
+  const UTIL = /^(write|create|edit|patch|multiedit)$/i;
+  if (!UTIL.test(String(nome || ""))) return "";
+  const c = st?.content;
+  let txt = "";
+  if (typeof c === "string") txt = c;
+  else if (Array.isArray(c)) txt = c.map((x) => (x && x.type === "text" ? x.text || "" : "")).join("\n");
+  txt = String(txt || "").trim();
+  if (!txt) return "";
+  const primeira = txt.split("\n")[0].trim();
+  return primeira.length > 120 ? primeira.slice(0, 118) + "…" : primeira;
 }
 
 /** Titulo de uma linha: arquivo + onde, ou o comando. */
@@ -3060,6 +3096,12 @@ function blockTool(sid, mid, p, streaming = false) {
       icon(stl.ic, "tic"),
       el("span", { class: "tlabel", text: stl.lbl }),
       assunto ? el("span", { class: "tsubject", text: assunto, title: st.input?.path || assunto }) : null,
+      // a linha do CLI ("Wrote file successfully: ...") entra no topo, antes
+      // do status: e' ela que diz o que aconteceu de verdade
+      (function () {
+        const r = toolResultLine(st, name);
+        return r ? el("span", { class: "tresult", text: r, title: r }) : null;
+      })(),
       stl.kind === "shell" && p.state?.progress?.shellID
         ? el("span", { class: "tstatus running", text: "rodando" })
         : el("span", { class: "tstatus " + status, text: status === "completed" ? "ok" : status }),
@@ -4214,7 +4256,22 @@ function renderParBody(card, sid) {
   const msgs = state.messages[sid] || [];
   const inner = $(".msg-inner", body) || body;
   inner.textContent = "";
-  for (const m of msgs.slice(-40)) inner.appendChild(messageNode(sid, m));
+  // O cartao usava um -40 fixo, sem saida: numa sessao longa as chamadas de
+  // ferramenta mais antigas (os `$ cd`, os `wrote`) simplesmente nao
+  // apareciam. Agora vale o mesmo limite do Foco, com o mesmo botao.
+  const LIMITE = state.limiteMsgs || 300;
+  const cortado = Math.max(0, msgs.length - LIMITE);
+  const visiveis = cortado > 0 ? msgs.slice(cortado) : msgs;
+  if (cortado > 0) {
+    const mais = el("button", { class: "clamp-btn", type: "button", text: "carregar mais " + fmtNum(cortado) });
+    mais.onclick = () => {
+      state.limiteMsgs = (state.limiteMsgs || LIMITE) + LIMITE;
+      store.set("limiteMsgs", state.limiteMsgs);
+      renderParBody(card, sid);
+    };
+    inner.appendChild(mais);
+  }
+  for (const m of visiveis) inner.appendChild(messageNode(sid, m));
   for (const [mid, live] of state.live[sid] || []) {
     if (!msgs.some((m) => m.id === mid)) {
       inner.appendChild(messageNode(sid, { id: mid, type: "assistant", content: [], time: { created: Date.now() } }, live));
@@ -4222,7 +4279,7 @@ function renderParBody(card, sid) {
   }
   paintWorking(body, sid);
   // a ultima resposta do cartao tambem nao e' recolhida
-  const ultimo = msgs.slice(-40).reverse().find((m) => m.type === "assistant");
+  const ultimo = visiveis.reverse().find((m) => m.type === "assistant");
   applyClamps(inner, ultimo ? msgKey(sid, ultimo.id) : null);
   preservarRolagem(body, chaveRolagem("par", sid));
 }
@@ -5115,6 +5172,7 @@ function openSettings() {
       state.accent = state.accent === id ? null : id;
       store.set("accent", state.accent);
       applyTheme();
+  renderDetBar();
       for (const x of sws.children) x.classList.remove("on");
       if (state.accent) b.classList.add("on");
     };
@@ -5130,6 +5188,7 @@ function openSettings() {
       state.fsize = v;
       store.set("fsize", v);
       applyTheme();
+  renderDetBar();
       for (const x of fsBox.children) x.classList.remove("on");
       b.classList.add("on");
     };
@@ -5146,19 +5205,32 @@ function openSettings() {
     ["raciocinio", "Só raciocínio", "Mostra o raciocínio e esconde o resto"],
     ["nenhum", "Só ao abrir", "Nada abre sozinho: você abre o que quiser"],
   ];
+  // um construtor so: serve o modal de Ajustes e a barra do topo. Assim os
+  // dois nunca divergem.
+  const construirDetalhe = (host) => {
+    host.textContent = "";
+    for (const [v, rot, dica] of MODOS) {
+      const b = el("button", {
+        class: (state.detalhe === v ? "on " : "") + "det-btn",
+        type: "button",
+        text: rot,
+        title: dica,
+        "aria-pressed": state.detalhe === v ? "true" : "false",
+      });
+      b.onclick = () => {
+        state.detalhe = v;
+        store.set("detalhe", v);
+        construirDetalhe(host);
+        // os dois modos usam o mesmo buildBody, mas cada um tem seu
+        // proprio caminho de render
+        renderMessages();
+        if (state.view === "paralelo") renderParalelo();
+      };
+      host.appendChild(b);
+    }
+  };
   const detBox = el("div", { class: "detalhe-opcoes" });
-  for (const [v, rot, dica] of MODOS) {
-    const b = el("button", { class: state.detalhe === v ? "on" : "", type: "button", text: rot, title: dica });
-    b.onclick = () => {
-      state.detalhe = v;
-      store.set("detalhe", v);
-      for (const x of detBox.children) x.classList.remove("on");
-      b.classList.add("on");
-      renderMessages();
-      if (state.view === "paralelo") renderParalelo();
-    };
-    detBox.appendChild(b);
-  }
+  construirDetalhe(detBox);
   gApar.appendChild(el("div", { class: "set-row" },
     el("div", { class: "grow" }, el("span", { class: "lbl", text: "Detalhe das rodadas" })),
     detBox
@@ -5271,7 +5343,7 @@ function openSettings() {
   gDad.appendChild(acts);
   body.appendChild(gDad);
 
-  closeModal = openModal({ title: "Ajustes", subtitle: "OpenCode Hub", body, wide: true });
+  closeModal = openModal({ title: "Ajustes", subtitle: "MegaAGT", body, wide: true });
   mostrarDiagnostico();
 }
 
@@ -5562,6 +5634,34 @@ function openMoveModal(s) {
 /* ============================================================
    Conexão e tema
    ============================================================ */
+/** Barra de detalhe na barra superior: a mesma escolha dos Ajustes. */
+function renderDetBar() {
+  const host = document.getElementById("detBar");
+  if (!host) return;
+  const MODOS = [
+    ["tudo", "Tudo", "Raciocínio, edições, shells e chamadas de ferramenta, tudo aberto"],
+    ["raciocinio", "Só raciocínio", "Mostra o raciocínio e esconde o resto"],
+    ["nenhum", "Só ao abrir", "Nada abre sozinho: você abre o que quiser"],
+  ];
+  host.textContent = "";
+  host.appendChild(el("span", { class: "det-rot", text: "detalhe" }));
+  for (const [v, rot, dica] of MODOS) {
+    const b = el("button", {
+      class: "det-btn" + (state.detalhe === v ? " on" : ""),
+      type: "button", text: rot, title: dica,
+      "aria-pressed": state.detalhe === v ? "true" : "false",
+    });
+    b.onclick = () => {
+      state.detalhe = v;
+      store.set("detalhe", v);
+      renderDetBar();
+      renderMessages();
+      if (state.view === "paralelo") renderParalelo();
+    };
+    host.appendChild(b);
+  }
+}
+
 function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
   // escala global de texto: os tokens --t-* sao multiplicados por --fs
@@ -5647,6 +5747,7 @@ function setView(v) {
    ============================================================ */
 async function init() {
   applyTheme();
+  renderDetBar();
 
   $$("#viewTabs .tab").forEach((t) => {
     t.onclick = () => setView(t.dataset.view);

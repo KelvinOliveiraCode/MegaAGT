@@ -1,5 +1,5 @@
 /* ============================================================
-   OpenCode Hub — base
+   MegaAGT — base
    Paleta derivada de uma unica cor de destaque; o resto e'
    neutro. Escala de espacamento em 4px, tipografia em 3 tamanhos.
    ============================================================ */
@@ -1265,3 +1265,22 @@ body.soltando::after {
 .blk.compact > summary .chip { margin-left: auto; }
 .blk.compact .blk-content .prose { font-size: var(--t-sm); }
 .blk.compact .blk-content { max-height: 480px; overflow-y: auto; }
+/* linha de resultado que o OpenCode CLI imprime: $ cmd, Wrote file ... */
+.blk.tool > summary .tresult {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0;
+}
+/* nota de ociosidade some quando a rodada terminou bem */
+.msg-note.hidden { display: none; }
+/* barra de detalhe na barra superior */
+.det-bar { display: flex; align-items: center; gap: 4px; flex: none; }
+.det-rot { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.det-btn {
+  padding: 3px 9px; font-size: var(--t-xs); font-weight: 600;
+  border: 1px solid var(--line); background: var(--raised); color: var(--ink-2);
+  border-radius: var(--r-sm); white-space: nowrap;
+}
+.det-btn:hover { color: var(--ink); border-color: var(--line-2); }
+.det-btn.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.detalhe-opcoes .det-btn { padding: 2px 8px; }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenCode Hub</title>
+<title>MegaAGT</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -57,7 +57,7 @@
 
   <div class="brand">
     <svg viewBox="0 0 24 24" class="brand-mark"><use href="#i-bolt"/></svg>
-    <span class="brand-name">OpenCode Hub</span>
+    <span class="brand-name">MegaAGT</span>
     <button id="connBtn" class="conn" type="button" title="Estado do serviço">
       <span class="conn-dot"></span><span id="connText">conectando</span>
     </button>
@@ -76,6 +76,10 @@
     <button class="tab" data-view="eventos" role="tab">Eventos<span id="evCount" class="pill"></span></button>
     <button class="tab" data-view="ambiente" role="tab">Ambiente</button>
   </nav>
+
+  <!-- detalhe da rodada: vale para o Foco e para o Paralelo, por isso fica
+       aqui e nao dentro de uma view so -->
+  <div class="det-bar" id="detBar" role="group" aria-label="Detalhe das rodadas"></div>
 
   <div class="top-actions">
     <button id="newSessionBtn" class="btn primary" type="button" title="Nova sessão (Ctrl+N)">
