@@ -126,6 +126,13 @@ fonte autoritativa do que está rodando. O painel do Paralelo se repinta a
 cada 2 s **sem recriar o grid**, para não perder o foco nem o rascunho dos
 campos.
 
+### Resumo da compactação
+
+Quando o contexto é compactado, o resumo aparece no chat como um bloco
+recolhível — razão (`auto`), tokens e contagem de linhas no cabeçalho, e o resumo
+em si renderizado como markdown por dentro. Funciona no Foco e nos cartões do
+Paralelo, que usam o mesmo `messageNode`.
+
 ### Avisos que antes não existiam
 - **Nova tentativa do provedor**: quando o modelo bate num 429 ou num
   endpoint fora, a sessão ficava parada por segundos sem sinal nenhum. Agora
