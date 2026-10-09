@@ -1219,3 +1219,42 @@ body.soltando::after {
 
 #retryBar { padding: var(--sp-2) var(--sp-5) 0; }
 #retryBar.hidden { display: none; }
+
+/* ---------------- painel de subagentes rodando ---------------- */
+#subsBar { padding: var(--sp-2) var(--sp-5) 0; }
+#subsBar.hidden { display: none; }
+.subs-panel {
+  border: 1px solid color-mix(in srgb, var(--busy) 40%, transparent);
+  border-radius: var(--r-md); background: color-mix(in srgb, var(--busy) 7%, var(--surface));
+  overflow: hidden;
+}
+.subs-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 6px 11px; border-bottom: 1px solid color-mix(in srgb, var(--busy) 25%, transparent);
+  font-size: var(--t-xs); font-weight: 600; color: var(--ink-2);
+}
+.subs-head svg { width: 13px; height: 13px; color: var(--busy); flex: none; }
+.subs-head .spin { margin-left: auto; }
+.subs-lista { display: flex; flex-direction: column; }
+.subs-item {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 5px 11px; background: none; border: none; text-align: left;
+  font-size: var(--t-xs); color: var(--ink-2); cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.subs-item:last-child { border-bottom: none; }
+.subs-item:hover { background: var(--hover); color: var(--ink); }
+.subs-item .agent-tag {
+  flex: none; font-size: 9.5px; font-weight: 700; letter-spacing: -.02em;
+  padding: 1px 6px; border-radius: var(--r-full);
+  background: var(--raised); border: 1px solid var(--line); color: var(--muted);
+}
+.subs-item .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subs-item .tk { flex: none; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.subs-item .wh { flex: none; font-size: 10px; color: var(--muted); }
+/* versao do cartao: uma linha por subagente, sem respiro */
+.p-subs:empty { display: none; }
+.p-subs { padding: 4px 8px 6px; }
+.subs-panel.compacto .subs-item { padding: 3px 8px; }
+.subs-panel.compacto .subs-head { padding: 4px 8px; }
+.subs-panel.compacto .subs-item .tk { display: none; }

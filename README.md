@@ -108,6 +108,24 @@ Quatro cartões que o app não mostrava em lugar nenhum:
 Campo acima do chat que filtra as mensagens da sessão aberta, com contador
 `acertos/total`. Some sozinho quando não há nada digitado.
 
+### Subagentes rodando
+Quando um modelo chama subagentes e fica esperando, aparece um painel
+acima do compositor (e uma versão compacta dentro de cada cartão do
+Paralelo) com:
+- quantos estão rodando;
+- o agente e o título de cada um;
+- tokens de entrada/saída e há quanto tempo;
+- clique leva direto à conversa daquele subagente.
+
+Quando um subagente termina, o resultado volta pela **inbox** da sessão que
+o chamou (`session.inbox.delivered`, com `metadata.childID` e
+`state: "completed"`), e a conversa do pai é recarregada para exibi-lo.
+
+A lista sai de `childrenOf(sid)` cruzada com `/api/session/active`, que é a
+fonte autoritativa do que está rodando. O painel do Paralelo se repinta a
+cada 2 s **sem recriar o grid**, para não perder o foco nem o rascunho dos
+campos.
+
 ### Avisos que antes não existiam
 - **Nova tentativa do provedor**: quando o modelo bate num 429 ou num
   endpoint fora, a sessão ficava parada por segundos sem sinal nenhum. Agora
