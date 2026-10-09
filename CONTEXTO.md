@@ -553,6 +553,28 @@ trocade sessão, configuração). Texto, foco e cursor vivem em
 antes de destruir o DOM para devolver depois. Sempre que criar um campo,
 lembre disso: o valor precisa sair do estado, não ser criado vazio.
 
+### Evento desconhecido não pode ser silencioso
+
+O `handleEvent` terminava num `default: break`. Qualquer tipo novo que o
+servidor passasse a emitir era descartado sem rastro — e o sintoma era
+"a sessão parou". Agora cada tipo desconhecido entra em
+`state.ignorados` com contagem e uma amostra do payload, e a aba Eventos
+mostra os dois; clicar abre o JSON. Foi assim que se descobriu
+`session.tool.progress`, `session.retry.scheduled`, `provider.updated`,
+`model.updated` e `project.updated` chegando sem tratamento.
+
+### `refreshMessages` não pode encolher a lista
+
+`/api/session/{id}/message` às vezes responde com menos dados. Substituir a
+lista pela resposta apagava mensagens na tela. `mergeServer` une por id e
+nunca deixa a resposta diminuir o que já está lá.
+
+### `/api/config` tem segredo
+
+A resposta traz os documentos de configuração com valores literais,
+inclusive chave de API em texto puro. O painel de Ambiente só mostra
+**nomes de seção** e ainda passa pelo redator (`seguro()`).
+
 ### A resposta do servidor nunca diminui
 
 `mergeServer` une o que veio do servidor com o que já estava na tela. Uma

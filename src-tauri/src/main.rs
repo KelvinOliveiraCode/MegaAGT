@@ -791,6 +791,92 @@ async fn session_stats(state: State<'_, AppState>) -> Result<Value, String> {
     run(&state, |api| async move { api.get("/api/experimental/session/stats").await }).await
 }
 
+/// Contexto que o modelo ve na sessao (instrucoes, arquivos, tools).
+#[tauri::command(rename_all = "snake_case")]
+async fn session_context(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    run(&state, move |api| {
+        let session_id = session_id.clone();
+        async move { api.get(&format!("/api/session/{}/context", session_id)).await }
+    })
+    .await
+}
+
+/// Formularios que o modelo abriu e ainda esperam resposta.
+#[tauri::command(rename_all = "snake_case")]
+async fn session_forms(state: State<'_, AppState>, session_id: String) -> Result<Value, String> {
+    run(&state, move |api| {
+        let session_id = session_id.clone();
+        async move { api.get(&format!("/api/session/{}/form", session_id)).await }
+    })
+    .await
+}
+
+/// Responde um formulario. `answer` e' um mapa campo -> valor.
+#[tauri::command(rename_all = "snake_case")]
+async fn reply_form(
+    state: State<'_, AppState>,
+    session_id: String,
+    form_id: String,
+    answer: Value,
+) -> Result<Value, String> {
+    run(&state, move |api| {
+        let session_id = session_id.clone();
+        let form_id = form_id.clone();
+        let answer = answer.clone();
+        async move {
+            api.post(
+                &format!("/api/session/{}/form/{}/reply", session_id, form_id),
+                json!({ "answer": answer }),
+            )
+            .await
+        }
+    })
+    .await
+}
+
+/// Cancela um formulario que voce nao quer responder.
+#[tauri::command(rename_all = "snake_case")]
+async fn cancel_form(
+    state: State<'_, AppState>,
+    session_id: String,
+    form_id: String,
+) -> Result<Value, String> {
+    run(&state, move |api| {
+        let session_id = session_id.clone();
+        let form_id = form_id.clone();
+        async move { api.delete(&format!("/api/session/{}/form/{}", session_id, form_id)).await }
+    })
+    .await
+}
+
+/// Regras de permissao salvas ("Sempre") — para listar e revogar.
+#[tauri::command(rename_all = "snake_case")]
+async fn saved_permissions(state: State<'_, AppState>) -> Result<Value, String> {
+    run(&state, |api| async move { api.get("/api/permission/saved").await }).await
+}
+
+/// Revoga uma regra salva.
+#[tauri::command(rename_all = "snake_case")]
+async fn delete_saved_permission(state: State<'_, AppState>, id: String) -> Result<Value, String> {
+    run(&state, move |api| {
+        let id = id.clone();
+        async move { api.delete(&format!("/api/permission/saved/{}", id)).await }
+    })
+    .await
+}
+
+/// Servidores MCP e seu estado.
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_servers(state: State<'_, AppState>) -> Result<Value, String> {
+    run(&state, |api| async move { api.get("/api/mcp").await }).await
+}
+
+/// Configuracao efetiva do OpenCode.
+#[tauri::command(rename_all = "snake_case")]
+async fn app_config(state: State<'_, AppState>) -> Result<Value, String> {
+    run(&state, |api| async move { api.get("/api/config").await }).await
+}
+
 /// Sessões com execucao em andamento.
 #[tauri::command(rename_all = "snake_case")]
 async fn active_sessions(state: State<'_, AppState>) -> Result<Value, String> {
@@ -1229,6 +1315,14 @@ fn main() {
             vcs_status,
             session_permissions,
             reply_permission,
+            session_context,
+            session_forms,
+            reply_form,
+            cancel_form,
+            saved_permissions,
+            delete_saved_permission,
+            mcp_servers,
+            app_config,
             mark_viewed,
         ])
         .setup(|app| {
