@@ -1284,3 +1284,15 @@ body.soltando::after {
 .det-btn:hover { color: var(--ink); border-color: var(--line-2); }
 .det-btn.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .detalhe-opcoes .det-btn { padding: 2px 8px; }
+/* form: descricao do campo e das opcoes (options sao objetos
+   {value,label,description} na API) */
+.field-desc { font-size: var(--t-xs); color: var(--muted); margin: -2px 0 6px; line-height: 1.35; }
+.opt-lbl { display: flex; flex-direction: column; gap: 2px; max-width: 52ch; }
+.opt-l { color: var(--ink); }
+.opt-d { font-size: var(--t-xs); color: var(--muted); line-height: 1.35; }
+
+/* Paralelo: perguntas/forms ficam fixos acima do rodape, sempre a vista
+   (o corpo rola, elas nao) */
+.p-forms:empty { display: none; }
+.p-forms { border-top: 1px solid var(--line); max-height: 45%; overflow: auto; flex: 0 0 auto; }
+.p-forms .form-card { margin: 6px 8px; }

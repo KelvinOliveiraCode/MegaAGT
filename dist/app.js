@@ -903,6 +903,7 @@ function clearLive(sid, mid) {
 
 const refetchTimers = {};
 let _subsTimer = null;
+let _subsTick = 0;
 /**
  * Cache de nos por cartao do Paralelo.
  *
@@ -2184,7 +2185,7 @@ async function refreshForms(sid) {
   } catch {
     state.forms[sid] = [];
   }
-  renderForms(sid);
+  pintarFormsDe(sid);
 }
 
 /** Aviso de nova tentativa do provedor, acima do compositor. */
@@ -2263,60 +2264,107 @@ function formasPendentes(sid) {
 
 function renderForms(sid) {
   const bar = $("#formBar");
-  if (!bar) return;
+  if (bar) desenharForms(bar, sid);
+}
+
+/** Desenha os forms pendentes de `sid` dentro de um host qualquer. */
+function desenharForms(host, sid) {
   const lista = sid ? formasPendentes(sid) : [];
-  bar.textContent = "";
-  if (!lista.length) {
-    bar.classList.add("hidden");
-    return;
-  }
-  bar.classList.remove("hidden");
-  for (const f of lista) {
-    bar.appendChild(formCard(sid, f));
+  host.textContent = "";
+  host.classList.toggle("hidden", !lista.length);
+  for (const f of lista) host.appendChild(formCard(sid, f));
+}
+
+/**
+ * Pinta os forms de `sid` onde eles devem aparecer na tela: no #formBar
+ * do Foco e no cartao da sessao no Paralelo. Antes os forms so' tinham
+ * lugar no Foco — no Paralelo nao existia host nenhum e a pergunta do
+ * modelo nao aparecia em nenhum dos dois.
+ */
+function pintarFormsDe(sid) {
+  if (state.view === "foco") {
+    const bar = $("#formBar");
+    if (bar) desenharForms(bar, sid);
+  } else if (state.view === "paralelo") {
+    const card = document.querySelector('.p-card[data-sid="' + sid + '"]');
+    const host = card && card.querySelector(".p-forms");
+    if (host) desenharForms(host, sid);
   }
 }
 
 function formCard(sid, f) {
-  const campos = f.fields || {};
-  const nomes = Object.keys(campos);
+  // A API devolve `fields` como ARRAY de campos (nao um mapa), e cada
+  // option de multiselect/select e' um objeto {value,label,description}.
+  // A resposta e' um mapa chave-do-campo -> valor (nao o indice do array).
+  // Era aqui que a pergunta quebrava: rotulo virava "[object Object]" e a
+  // chave da resposta era o indice em vez de key.
+  const campos = Array.isArray(f.fields) ? f.fields : Object.values(f.fields || {});
   const caixa = el("div", { class: "form-fields" });
   const valores = {};
 
-  for (const nome of nomes) {
-    const c = campos[nome] || {};
-    const tipo = typeof c === "string" ? c : c.type || "string";
-    const rotulo = (typeof c === "object" && (c.label || c.title)) || nome;
-    const linha = el("div", { class: "field" }, el("label", { text: rotulo }));
+  const opValor = (o) => (typeof o === "string" ? o : (o && o.value));
+  const opTexto = (o) => (typeof o === "string" ? o : (o && (o.label || o.value)) || "opcao");
+  const opDesc = (o) => (o && typeof o === "object" && o.description) || null;
+  const rotuloOpt = (o, i) => {
+    const id = "frm_" + sid + "_" + i;
+    const desc = opDesc(o);
+    return { id, node: el("label", { for: id, class: "opt-lbl" },
+      el("span", { class: "opt-l", text: opTexto(o) }),
+      desc ? el("span", { class: "opt-d", text: desc }) : null) };
+  };
+
+  for (const c of campos) {
+    if (!c || c.hidden || !c.key) continue;
+    const key = c.key;
+    const tipo = c.type || "string";
+    const titulo = c.title || key;
+    const opts = Array.isArray(c.options) ? c.options : [];
+    const linha = el("div", { class: "field" },
+      el("label", { text: titulo + (c.required ? " *" : "") }));
+    if (c.description) linha.appendChild(el("div", { class: "field-desc", text: c.description }));
+
     let campo;
     if (tipo === "boolean") {
       campo = el("input", { type: "checkbox" });
-    } else if (tipo === "number" || tipo === "integer") {
-      campo = el("input", { type: "number", class: "input", placeholder: String(tipo) });
-      if (tipo === "integer") campo.step = "1";
-    } else if (tipo === "multiselect" && Array.isArray(c.options)) {
+      campo.checked = !!c.default;
+      campo.oninput = campo.onchange = () => { valores[key] = campo.checked; };
+    } else if (tipo === "multiselect") {
       campo = el("div", { class: "form-opts" });
-      for (const o of c.options) {
-        const id = "f_" + sid + "_" + nome + "_" + String(o).replace(/\W/g, "");
-        const cb = el("input", { type: "checkbox", id });
-        cb.onchange = () => {
-          const marcados = [...campo.querySelectorAll("input:checked")].map((x) => x.value);
-          valores[nome] = marcados;
-        };
-        campo.append(cb, el("label", { for: id, text: String(o) }));
-      }
-      valores[nome] = [];
+      const marcar = () => { valores[key] = [...campo.querySelectorAll("input:checked")].map((x) => x.value); };
+      opts.forEach((o, i) => {
+        const { id, node } = rotuloOpt(o, i);
+        const cb = el("input", { type: "checkbox", id, value: opValor(o) });
+        if (Array.isArray(c.default) && c.default.includes(opValor(o))) cb.checked = true;
+        cb.onchange = marcar;
+        campo.append(cb, node);
+      });
+      valores[key] = Array.isArray(c.default) ? c.default.slice() : [];
+    } else if (tipo === "string" && opts.length) {
+      campo = el("div", { class: "form-opts" });
+      const marcar = () => { const s = [...campo.querySelectorAll("input:checked")][0]; valores[key] = s ? s.value : ""; };
+      opts.forEach((o, i) => {
+        const { id, node } = rotuloOpt(o, i);
+        const cb = el("input", { type: "radio", name: "frm_" + sid + "_" + key, id, value: opValor(o) });
+        cb.onchange = marcar;
+        campo.append(cb, node);
+      });
+      valores[key] = typeof c.default === "string" ? c.default : "";
+    } else if (tipo === "number" || tipo === "integer") {
+      campo = el("input", { type: "number", class: "input" });
+      if (tipo === "integer") campo.step = "1";
+      campo.value = c.default ?? "";
+      campo.oninput = campo.onchange = () => { valores[key] = campo.value === "" ? null : Number(campo.value); };
     } else {
-      campo = el("input", { type: "text", class: "input", placeholder: rotulo });
+      campo = el("input", { type: "text", class: "input", placeholder: c.placeholder || titulo });
+      campo.value = c.default ?? "";
+      campo.oninput = campo.onchange = () => { valores[key] = campo.value; };
     }
-    campo.oninput = () => {
-      valores[nome] = tipo === "boolean" ? campo.checked : campo.value;
-    };
-    campo.onchange = campo.oninput;
     linha.appendChild(campo);
     caixa.appendChild(linha);
   }
 
-  const responder = async () => {
+  const responderBtn = el("button", { class: "btn primary", text: "Responder" });
+  responderBtn.onclick = async () => {
     responderBtn.disabled = true;
     try {
       await api("reply_form", { session_id: sid, form_id: f.id, answer: valores });
@@ -2335,14 +2383,13 @@ function formCard(sid, f) {
       fail(e);
     }
   };
-  const responderBtn = el("button", { class: "btn primary", text: "Responder" });
-  responderBtn.onclick = responder;
 
+  const conta = Object.keys(valores).length;
   return el("div", { class: "form-card" },
     el("div", { class: "form-head" },
       icon("i-list"),
       el("span", { class: "t", text: f.title || "O modelo fez uma pergunta" }),
-      el("span", { class: "chip muted", text: nomes.length + (nomes.length === 1 ? " campo" : " campos") })
+      el("span", { class: "chip muted", text: conta + (conta === 1 ? " campo" : " campos") })
     ),
     caixa,
     el("div", { class: "form-acts" }, responderBtn, el("button", { class: "btn", text: "Pular", onclick: pular }))
@@ -4181,6 +4228,9 @@ function construirCartaoParalelo(sid) {
   card.appendChild(body);
   const painelInicial = subsPainel(sid, true);
   if (painelInicial) subsHost.appendChild(painelInicial);
+  // perguntas/forms do modelo, fixos acima do rodape (o corpo rola, elas nao)
+  const formsHost = el("div", { class: "p-forms hidden" });
+  card.appendChild(formsHost);
 
   const input = el("input", { placeholder: "Mensagem…" });
   input.value = state.draft.cards[sid] || "";
@@ -4309,6 +4359,7 @@ function renderParalelo() {
     card = construirCartaoParalelo(sid);
     grid.appendChild(card);
     makeCardDraggable(card, sid);
+    refreshForms(sid);
     const cardVivo = () => document.querySelector('.p-card[data-sid="' + sid + '"]');
     refreshMessages(sid).then(() => {
       const alvo = cardVivo() || card;
@@ -4349,15 +4400,23 @@ function renderParalelo() {
   if (!_subsTimer) {
     _subsTimer = setInterval(() => {
       if (state.view !== "paralelo" || parAjustando) return;
+      _subsTick++;
+      const puxarForms = _subsTick % 3 === 0; // forms a cada ~6 s (GET barato)
       for (const cardEl of document.querySelectorAll(".p-card")) {
+        const sid = cardEl.dataset.sid;
         const host = cardEl.querySelector(".p-subs");
-        if (!host) continue;
-        const painel = subsPainel(cardEl.dataset.sid, true);
-        const ids = painel ? [...painel.querySelectorAll(".subs-item")].map((x) => x.textContent).join("|") : "";
-        if (host.__subsIds === ids) continue;
-        host.__subsIds = ids;
-        host.textContent = "";
-        if (painel) host.appendChild(painel);
+        if (host) {
+          const painel = subsPainel(sid, true);
+          const ids = painel ? [...painel.querySelectorAll(".subs-item")].map((x) => x.textContent).join("|") : "";
+          if (host.__subsIds !== ids) {
+            host.__subsIds = ids;
+            host.textContent = "";
+            if (painel) host.appendChild(painel);
+          }
+        }
+        // perguntas/forms: repuxa para o caso de o nome do evento nao ter
+        // sido capturado. E' o que faltava no Paralelo — la nem existia host.
+        if (puxarForms && sid) refreshForms(sid);
       }
     }, 2000);
   }
