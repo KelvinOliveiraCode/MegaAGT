@@ -4093,214 +4093,257 @@ function shortModelTag(s) {
   return n ? n.slice(0, 22) : "—";
 }
 
+/**
+ * Monta um cartao do Paralelo: cabecalho (titulo, modo, modelo,
+ * effort, estado, parar, fixar), corpo com as mensagens e o painel
+ * compacto de subagentes, e o rodape com o composer.
+ * E' chamado UMA vez por sessao fixada — depois o cartao e'
+ * reutilizado (ver renderParalelo), entao o composer nunca e'
+ * destruido e o foco de quem esta escrevendo sobrevive.
+ */
+function construirCartaoParalelo(sid) {
+  const s = sessionById(sid);
+  const card = el("div", { class: "p-card" + (isBusy(sid) ? " busy" : "") });
+  card.dataset.sid = sid;
+  const tam = parSize(sid);
+  card.style.width = tam.w + "px";
+  card.style.height = tam.h + "px";
+
+  const title = el("div", { class: "t", text: s.title || s.id, title: s.title || s.id });
+  title.onclick = () => {
+    selectSession(sid);
+    setView("foco");
+  };
+
+  const pinBtn = el("button", { class: "icon-btn on", title: "Desafixar" });
+  pinBtn.appendChild(icon("i-pin"));
+  pinBtn.onclick = (e) => {
+    e.stopPropagation();
+    togglePin(sid);
+  };
+
+  const modelBtn = el("button", { class: "p-model", type: "button", title: "Trocar modelo" },
+    el("span", { class: "nowrap", text: shortModelTag(s) || "padrão" }));
+  modelBtn.onclick = (e) => {
+    e.stopPropagation();
+    openModelPicker(modelBtn, s);
+  };
+
+  const effBtn = el("button", { class: "p-effort", type: "button", title: "Effort de raciocínio" },
+    el("span", { class: "nowrap", text: s.model?.variant || "effort" }));
+  effBtn.onclick = (e) => {
+    e.stopPropagation();
+    openEffortPicker(effBtn, s);
+  };
+
+  const agBtn = el("button", { class: "p-agent", type: "button" });
+  const modoAtual = s.agent || "Build";
+  agBtn.textContent = modoAtual;
+  agBtn.title = "Modo: " + modoAtual + "  clique para trocar";
+  agBtn.onclick = (e) => {
+    e.stopPropagation();
+    openAgentPicker(agBtn, s);
+  };
+
+  card.appendChild(
+    el("div", { class: "p-head" },
+      el("span", { class: "s-dot " + sessionState(s) }),
+      title,
+      agBtn,
+      modelBtn,
+      effBtn,
+      contextCircle(sid, { pequeno: true }),
+      makeStopButton(sid),
+      pinBtn
+    )
+  );
+
+  const body = el("div", { class: "p-body" }, el("div", { class: "msg-inner" }));
+  const subsHost = el("div", { class: "p-subs" });
+  body.appendChild(subsHost);
+  card.appendChild(body);
+  const painelInicial = subsPainel(sid, true);
+  if (painelInicial) subsHost.appendChild(painelInicial);
+
+  const input = el("input", { placeholder: "Mensagem…" });
+  input.value = state.draft.cards[sid] || "";
+  const gravarCard = () => {
+    state.draft.cards[sid] = input.value;
+    store.set("draft.cards", state.draft.cards);
+  };
+  input.addEventListener("input", gravarCard);
+  input.addEventListener("change", gravarCard);
+  const btn = el("button", { class: "send-btn", title: "Enviar" });
+  btn.appendChild(icon("i-send"));
+  const foot = el("div", { class: "p-foot", "data-alvo": sid });
+  mountAnexos(foot, sid);
+  const go = async () => {
+    const texto = input.value.trim();
+    const anexos = anexosDe(sid);
+    if (!texto && !anexos.length) return;
+    input.value = "";
+    delete state.draft.cards[sid];
+    store.set("draft.cards", state.draft.cards);
+    try {
+      await api("send_prompt", {
+        session_id: sid,
+        text: texto,
+        delivery: resolveDelivery(sid),
+        files: anexos.map((a) => ({ uri: a.uri, name: a.name })),
+      });
+      setBusy(sid, true);
+      pushPending(sid, texto, anexos.map((a) => ({ name: a.name, folder: a.folder, size: a.size })));
+      limparAnexos(sid);
+      state.messages[sid] = mergePending(sid, state.messages[sid] || []);
+      renderParBody(card, sid);
+      paintCardBusy(card, sid);
+      queueSessionRefresh();
+    } catch (e) {
+      fail(e);
+    }
+  };
+  btn.onclick = go;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      go();
+    }
+  });
+  foot.append(botaoClipe(sid, "Anexar arquivos neste cartao"), input, btn);
+  card.appendChild(foot);
+  return card;
+}
+
+/** Atualiza no lugar o que do cabecalho muda sem que o cartao
+ *  precise nascer de novo: estado, titulo, modo, modelo e
+ *  effort. Os botoes e seus cliques ficam intocados. */
+function atualizarCabeca(card, sid) {
+  const s = sessionById(sid);
+  if (!s) return;
+  const dot = $(".s-dot", card);
+  if (dot) dot.className = "s-dot " + sessionState(s);
+  const titulo = $(".t", card);
+  if (titulo) {
+    const txt = s.title || s.id;
+    if (titulo.textContent !== txt) {
+      titulo.textContent = txt;
+      titulo.title = txt;
+    }
+  }
+  const ag = $(".p-agent", card);
+  if (ag) {
+    const modo = s.agent || "Build";
+    if (ag.textContent !== modo) {
+      ag.textContent = modo;
+      ag.title = "Modo: " + modo + "  clique para trocar";
+    }
+  }
+  const mod = $(".p-model span", card);
+  if (mod) mod.textContent = shortModelTag(s) || "padrão";
+  const eff = $(".p-effort span", card);
+  if (eff) eff.textContent = s.model?.variant || "effort";
+}
+
 function renderParalelo() {
   const root = $("#viewRoot");
   if (!root) return;
-  // nao recria os cartoes no meio de um arraste: o elemento sob o cursor
-  // sumiria e o tamanho/posicao perdidos
   if (parAjustando) return;
-  // guarda o rascunho e o foco de cada campo antes de recriar os cartoes
-  const focoAntes = new Map();
-  for (const inp of $$(".p-foot input")) {
-    const card = inp.closest(".p-card");
-    if (card?.dataset.sid) {
-      state.draft.cards[card.dataset.sid] = inp.value;
-      if (inp === document.activeElement) focoAntes.set(card.dataset.sid, inp.selectionEnd ?? inp.value.length);
-    }
-  }
-  store.set("draft.cards", state.draft.cards);
-  root.textContent = "";
+
   const pins = parOrder(state.pins.filter((id) => sessionById(id)));
+
   if (!pins.length) {
-    root.appendChild(
-      el("div", { class: "empty" },
-        el("h3", { text: "Nenhuma sessão fixada" }),
-        el("p", { text: "Use o botao de fixar em uma sessão da barra lateral para acompanhar varias conversas ao mesmo tempo, todas em streaming ao vivo." }),
-        el("p", { class: "dim", text: "Arraste o cabecalho para mudar a ordem e o canto inferior direito para redimensionar." })
-      )
-    );
+    if (!root.querySelector(".empty")) {
+      root.textContent = "";
+      root.appendChild(
+        el("div", { class: "empty" },
+          el("h3", { text: "Nenhuma sessão fixada" }),
+          el("p", { text: "Use o botao de fixar em uma sessão da barra lateral para acompanhar varias conversas ao mesmo tempo, todas em streaming ao vivo." }),
+          el("p", { class: "dim", text: "Arraste o cabecalho para mudar a ordem e o canto inferior direito para redimensionar." })
+        )
+      );
+    }
     return;
   }
-  const grid = el("div", { class: "p-grid" });
+
+  // Reconcilia o grid em vez de recria-lo: reaproveita os
+  // cartoes que ja existem, cria os que faltam e tira os que
+  // sairam dos pins. Antes o grid era destruido e refeito a
+  // cada chamada — e refreshSessions() chamava renderView()
+  // a cada evento de stream (o sig inclui time.updated, que
+  // muda a cada token). Com varios chats gerando ao mesmo
+  // tempo o grid era refeito ~11 vezes por segundo: o
+  // composer era recriado (o foco de quem escrevia era
+  // roubado) e a camera de cada cartao pulava.
+  let grid = root.querySelector(".p-grid");
+  if (!grid) {
+    root.textContent = "";
+    grid = el("div", { class: "p-grid" });
+    root.appendChild(grid);
+  }
+
+  for (const c of [...grid.querySelectorAll(".p-card")]) {
+    if (!pins.includes(c.dataset.sid)) c.remove();
+  }
+
   for (const sid of pins) {
-    const s = sessionById(sid);
-    if (!s) continue;
-    const card = el("div", { class: "p-card" + (isBusy(sid) ? " busy" : "") });
-    card.dataset.sid = sid;
-    const tam = parSize(sid);
-    card.style.width = tam.w + "px";
-    card.style.height = tam.h + "px";
-
-    const title = el("div", { class: "t", text: s.title || s.id, title: s.title || s.id });
-    title.onclick = () => {
-      selectSession(sid);
-      setView("foco");
-    };
-
-    const pinBtn = el("button", { class: "icon-btn on", title: "Desafixar" });
-    pinBtn.appendChild(icon("i-pin"));
-    pinBtn.onclick = (e) => {
-      e.stopPropagation();
-      togglePin(sid);
-    };
-
-    const modelBtn = el("button", { class: "p-model", type: "button", title: "Trocar modelo" },
-      el("span", { class: "nowrap", text: shortModelTag(s) || "padrão" }));
-    modelBtn.onclick = (e) => {
-      e.stopPropagation();
-      openModelPicker(modelBtn, s);
-    };
-
-    // effort/thinking: no Foco fica no menu da sessao; aqui o cartao tinha so'
-    // modelo e modo, e trocar o effort obrigava sair do Paralelo.
-    // So' aparece quando o modelo realmente tem variantes.
-    // o catalogo pode carregar depois que o cartao nasceu, entao o botao
-    // aparece sempre: picker e' quem diz quando o modelo nao tem variante.
-    const effBtn = el("button", { class: "p-effort", type: "button", title: "Effort de raciocínio" },
-      el("span", { class: "nowrap", text: s.model?.variant || "effort" }));
-    effBtn.onclick = (e) => {
-      e.stopPropagation();
-      openEffortPicker(effBtn, s);
-    };
-
-    // modo (build/plan): no Foco fica no cabeçalho da sessão; aqui o cartão
-    // tinha só o modelo, e trocar de modo obrigava sair do Paralelo
-    const agBtn = el("button", { class: "p-agent", type: "button" });
-    // o rotulo e' o modo da sessao. agentLabel espera um agente, e a sessao
-    // tem id mas nao tem name: passando a sessao o botao mostrava o id.
-    const modoAtual = s.agent || "Build";
-    agBtn.textContent = modoAtual;
-    agBtn.title = "Modo: " + modoAtual + "  clique para trocar";
-    agBtn.onclick = (e) => {
-      e.stopPropagation();
-      openAgentPicker(agBtn, s);
-    };
-
-    card.appendChild(
-      el("div", { class: "p-head" },
-        el("span", { class: "s-dot " + sessionState(s) }),
-        title,
-        agBtn,
-        modelBtn,
-        effBtn,
-        contextCircle(sid, { pequeno: true }),
-        makeStopButton(sid),
-        pinBtn
-      )
-    );
-
-    const body = el("div", { class: "p-body" }, el("div", { class: "msg-inner" }));
-    // subagentes rodando por conta deste cartao. No Paralelo o espaco e' curto,
-    // entao o painel e' a versao compacta e entra no fim do corpo.
-    const subsHost = el("div", { class: "p-subs" });
-    body.appendChild(subsHost);
-    card.appendChild(body);
-    const pintarSubs = () => {
-      subsHost.textContent = "";
-      const painel = subsPainel(sid, true);
-      if (painel) subsHost.appendChild(painel);
-    };
-    pintarSubs();
-
-    const input = el("input", { placeholder: "Mensagem…" });
-    input.value = state.draft.cards[sid] || "";
-    const gravarCard = () => {
-      state.draft.cards[sid] = input.value;
-      store.set("draft.cards", state.draft.cards);
-    };
-    input.addEventListener("input", gravarCard);
-    input.addEventListener("change", gravarCard);
-    const btn = el("button", { class: "send-btn", title: "Enviar" });
-    btn.appendChild(icon("i-send"));
-    const foot = el("div", { class: "p-foot", "data-alvo": sid });
-    mountAnexos(foot, sid); // anexos que ja estavam presos a este cartao
-    const go = async () => {
-      const texto = input.value.trim();
-      const anexos = anexosDe(sid);
-      if (!texto && !anexos.length) return;
-      input.value = "";
-      delete state.draft.cards[sid];
-      store.set("draft.cards", state.draft.cards);
-      try {
-        await api("send_prompt", {
-          session_id: sid,
-          text: texto,
-          delivery: resolveDelivery(sid),
-          files: anexos.map((a) => ({ uri: a.uri, name: a.name })),
-        });
-        setBusy(sid, true);
-        pushPending(sid, texto, anexos.map((a) => ({ name: a.name, folder: a.folder, size: a.size })));
-        limparAnexos(sid);
-        state.messages[sid] = mergePending(sid, state.messages[sid] || []);
-        renderParBody(card, sid);
-        pintarSubs();
-        paintCardBusy(card, sid);
-        queueSessionRefresh();
-      } catch (e) {
-        fail(e);
-      }
-    };
-    btn.onclick = go;
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        go();
-      }
-    });
-    foot.append(botaoClipe(sid, "Anexar arquivos neste cartao"), input, btn);
-    card.appendChild(foot);
+    if (!sessionById(sid)) continue;
+    let card = grid.querySelector('.p-card[data-sid="' + sid + '"]');
+    if (card) continue;
+    card = construirCartaoParalelo(sid);
     grid.appendChild(card);
     makeCardDraggable(card, sid);
-
-    // Re-resolve o cartao pelo sid: entre o clique e a resposta do servidor o
-    // grid pode ter sido reconstruido (outro pin, arraste, timer), e o no
-    // guardado no fecho fica solto — ai o append ia para um elemento que nao
-    // esta na tela e o cartao ficava vazio para sempre. Foi assim que tres
-    // sessoes fixadas apareceram sem nenhuma mensagem.
     const cardVivo = () => document.querySelector('.p-card[data-sid="' + sid + '"]');
     refreshMessages(sid).then(() => {
       const alvo = cardVivo() || card;
       renderParBody(alvo, sid);
       paintCardBusy(alvo, sid);
-      pintarSubs();
     });
     requestAnimationFrame(() => {
       const alvo = cardVivo();
-      if (alvo) { renderParBody(alvo, sid); pintarSubs(); }
+      if (alvo) renderParBody(alvo, sid);
     });
+  }
 
-    if (focoAntes.has(sid)) {
-      const onde = focoAntes.get(sid);
-      requestAnimationFrame(() => {
-        const campo = $(".p-foot input", card);
-        if (!campo) return;
-        campo.focus({ preventScroll: true });
-        const fim = Math.min(onde, campo.value.length);
-        campo.setSelectionRange(fim, fim);
-      });
+  // reordena so' se a ordem realmente mudou (appendChild move o no)
+  const ordemAtual = [...grid.querySelectorAll(".p-card")].map((c) => c.dataset.sid).join("|");
+  if (ordemAtual !== pins.join("|")) {
+    for (const sid of pins) {
+      const card = grid.querySelector('.p-card[data-sid="' + sid + '"]');
+      if (card) grid.appendChild(card);
     }
   }
-  root.appendChild(grid);
-  // os cartoes ja existem: so' repinta o painel de subagentes. Faz isso
-  // sem recriar o grid, que perderia o foco e o rascunho de cada campo.
-  clearInterval(_subsTimer);
-  _subsTimer = setInterval(() => {
-    if (state.view !== "paralelo" || parAjustando) return;
-    for (const cardEl of document.querySelectorAll(".p-card")) {
-      const host = cardEl.querySelector(".p-subs");
-      if (!host) continue;
-      const painel = subsPainel(cardEl.dataset.sid, true);
-      const ids = painel ? [...painel.querySelectorAll(".subs-item")].map((x) => x.textContent).join("|") : "";
-      // A comparacao antiga olhava childElementCount, que e' 2 aconteca o que
-      // acontecer (cabecalho + lista): com dois ou mais subagentes a conta
-      // nunca fechava e o painel era refeito a cada 2 s,reiniciando a animacao
-      // de loading e deslocando o texto. Assinatura pelo conteudo resolve.
-      if (host.__subsIds === ids) continue;
-      host.__subsIds = ids;
-      host.textContent = "";
-      if (painel) host.appendChild(painel);
-    }
-  }, 2000);
+
+  // o que muda sem precisar recriar: cabecalho, estado e
+  // conteudo. renderParBody e' incremental — nao toca no
+  // DOM quando nada mudou — e o composer nao e' tocado de
+  // jeito nenhum, entao foco e rascunho sobrevivem.
+  for (const sid of pins) {
+    const card = grid.querySelector('.p-card[data-sid="' + sid + '"]');
+    if (!card) continue;
+    atualizarCabeca(card, sid);
+    paintCardBusy(card, sid);
+    renderParBody(card, sid);
+  }
+
+  // subagentes: um unico timer para a vista inteira. Antes
+  // era apagado e recriado a cada chamada, o que resetava o
+  // intervalo — com chamadas frequentes ele nunca chegava
+  // a disparar.
+  if (!_subsTimer) {
+    _subsTimer = setInterval(() => {
+      if (state.view !== "paralelo" || parAjustando) return;
+      for (const cardEl of document.querySelectorAll(".p-card")) {
+        const host = cardEl.querySelector(".p-subs");
+        if (!host) continue;
+        const painel = subsPainel(cardEl.dataset.sid, true);
+        const ids = painel ? [...painel.querySelectorAll(".subs-item")].map((x) => x.textContent).join("|") : "";
+        if (host.__subsIds === ids) continue;
+        host.__subsIds = ids;
+        host.textContent = "";
+        if (painel) host.appendChild(painel);
+      }
+    }, 2000);
+  }
 }
 
 /**
