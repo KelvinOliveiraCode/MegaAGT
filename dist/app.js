@@ -1900,10 +1900,17 @@ function pushPending(sid, text, files) {
 /** Some da fila de pendencia assim que o servidor devolve a mesma mensagem. */
 function mergePending(sid, lista) {
   const pend = state.pending[sid];
-  if (!pend || !pend.length) return lista;
+  // Tira de saida TODO eco local (id "local-…"). Ele e' so' um placeholder
+  // enquanto o servidor nao devolve a mensagem; mante-lo na lista depois que
+  // a real chegou era o que duplicava a mensagem do usuario (o eco continuava
+  // em state.messages porque mergeServer preserva as anteriores). Regra:
+  // sempre limpo, e so' re-adiciono o que ainda nao voltou do servidor.
+  const semEco = lista.filter((m) => !String(m.id || "").startsWith("local-"));
+  if (!pend || !pend.length) return semEco;
+  // pendentes que o servidor ainda nao devolveu (mesmo texto, dentro da janela)
   const restam = pend.filter(
     (p) =>
-      !lista.some(
+      !semEco.some(
         (m) =>
           m.type === "user" &&
           (m.text || "") === p.text &&
@@ -1911,7 +1918,7 @@ function mergePending(sid, lista) {
       )
   );
   state.pending[sid] = restam;
-  if (!restam.length) return lista;
+  if (!restam.length) return semEco;
   const eco = restam.map((p) => ({
     id: "local-" + p.created,
     type: "user",
@@ -1919,7 +1926,7 @@ function mergePending(sid, lista) {
     files: p.files,
     time: { created: p.created },
   }));
-  return chronological([...lista, ...eco]);
+  return chronological([...semEco, ...eco]);
 }
 
 /* ---------- indicador de trabalho ---------- */
@@ -4444,7 +4451,14 @@ function renderParBody(card, sid) {
   // apareciam. Agora vale o mesmo limite do Foco, com o mesmo botao.
   const LIMITE = state.limiteMsgs || 300;
   const cortado = Math.max(0, msgs.length - LIMITE);
-  const visiveis = cortado > 0 ? msgs.slice(cortado) : msgs;
+  // id unico: um mesmo id nao pode virar dois nos na tela
+  const vistos = new Set();
+  const visiveis = (cortado > 0 ? msgs.slice(cortado) : msgs).filter((m) => {
+    const id = String(m.id || "");
+    if (!id || vistos.has(id)) return false;
+    vistos.add(id);
+    return true;
+  });
 
   const cache = parCache.get(card) || { nos: new Map(), ids: [], sig: "", live: null, liveIds: undefined };
   parCache.set(card, cache);
@@ -4472,11 +4486,17 @@ function renderParBody(card, sid) {
   }
 
   if (soCresceu) {
-    // acrescenta so' o que chegou, sem esvaziar nada
+    // acrescenta so' o que chegou. Mas o patchStream (streaming) pode ja' ter
+    // criado o no dessa mensagem direto no DOM, fora do cache — anexar outro
+    // duplicaria. Nesse caso troca o no pelo recem-renderizado (conteudo
+    // completo), em vez de empilhar um segundo igual.
     for (let i = cache.ids.length; i < visiveis.length; i++) {
-      const no = messageNode(sid, visiveis[i]);
-      cache.nos.set(visiveis[i].id, no);
-      inner.appendChild(no);
+      const m = visiveis[i];
+      const no = messageNode(sid, m);
+      const existente = inner.querySelector('[data-msg="' + msgKey(sid, m.id) + '"]');
+      if (existente) existente.replaceWith(no);
+      else inner.appendChild(no);
+      cache.nos.set(m.id, no);
     }
   } else {
     inner.textContent = "";
