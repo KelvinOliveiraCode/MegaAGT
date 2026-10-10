@@ -1363,6 +1363,23 @@ function handleEvent(ev) {
       if (sid === state.selectedId) toast(errorText(d.error, "erro na sessão"), "err");
       break;
     }
+    // Variacoes do ciclo de vida da sessao. created/updated/deleted
+    // ja' disparam queueSessionRefresh() no comeco do handleEvent; o
+    // case serve so' para nao cair no default. Sem isso elas eram
+    // registradas como "sem tratamento" na aba Eventos mesmo estando
+    // tratadas — foi o que fez o painel acusar session.created.
+    case "session.created":
+    case "session.updated":
+    case "session.deleted": {
+      break;
+    }
+    // Instrucoes (o system prompt) da sessao mudaram. Nao mexe nas
+    // mensagens, mas os metadados da sessao podem ter mudado; um
+    // refresh da lista mantem tudo em ordem.
+    case "session.instructions.updated": {
+      queueSessionRefresh();
+      break;
+    }
     default: {
       // Evento que o app nao conhece. Antes caia num `break` silencioso e a
       // sessao podia ficar parada sem nenhum sinal — foi assim que o
