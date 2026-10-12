@@ -1,8 +1,8 @@
 {
-  "name": "opencode-hub",
+  "name": "megaagt",
   "private": true,
   "version": "1.0.0",
-  "description": "Hub desktop para OpenCode CLI — sessões em paralelo, subagentes, thinking e temas",
+  "description": "MegaAGT — desktop para o OpenCode CLI: sessões em paralelo, subagentes, raciocínio e temas",
   "dependencies": {
     "@tauri-apps/api": "^2.0.0"
   },

@@ -1,8 +1,8 @@
 [package]
-name = "opencode-hub"
+name = "megaagt"
 version = "1.0.0"
 edition = "2021"
-description = "Desktop hub for OpenCode CLI: parallel sessions, subagents, thinking, themes"
+description = "MegaAGT — desktop app for the OpenCode CLI: parallel sessions, subagents, reasoning, themes"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

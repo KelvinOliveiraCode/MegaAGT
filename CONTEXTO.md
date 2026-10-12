@@ -33,7 +33,7 @@ tokens e custo.
 ## 2. Rodar e publicar
 
 ```bash
-cd C:\Users\Kelvin\Desktop\opencode-hub
+cd C:\Users\Kelvin\Desktop\MegaAGT
 
 npm run dev      # desenvolvimento com hot reload
 npm run build    # release (~90 s)
@@ -42,11 +42,11 @@ npm run build    # release (~90 s)
 Depois de `build`, **copie** o executável para a área de trabalho:
 
 ```bash
-Copy-Item src-tauri\target\release\opencode-hub.exe "C:\Users\Kelvin\Desktop\MegaAGT.exe" -Force
+Copy-Item src-tauri\target\release\megaagt.exe "C:\Users\Kelvin\Desktop\MegaAGT.exe" -Force
 ```
 
-O `.exe` fica travado enquanto o app está rodando — **feche o Hub antes de
-copiar**, senão o `Copy-Item` falha.
+O `.exe` fica travado enquanto o app está rodando — **feche o MegaAGT antes
+de copiar**, senão o `Copy-Item` falha.
 
 ### Depuração com CDP (opcional, útil para testes)
 
@@ -405,7 +405,7 @@ a barra aparece.
 | cercas de código | Numeração de linha + rótulo da linguagem (`data-lang`) |
 
 O cabeçalho é `ícone · ação · assunto`:
-`editar  ~\Desktop\opencode-hub\src-tauri\src\main.rs  OK`
+`editar  ~\Desktop\MegaAGT\src-tauri\src\main.rs  OK`
 
 O assunto trunca **pelo meio** (o fim do caminho importa mais) e o texto
 completo fica no `title`.
