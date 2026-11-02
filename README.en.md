@@ -1,126 +1,167 @@
-<img src="https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2">
-<img src="https://img.shields.io/badge/Rust-2021-dea584?style=flat-square&logo=rust&logoColor=black" alt="Rust">
-<img src="https://img.shields.io/badge/JavaScript-vanilla-f7df1e?style=flat-square&logo=javascript&logoColor=black" alt="Vanilla JS">
-<img src="https://img.shields.io/badge/platform-Windows-0078d6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
-<img src="https://img.shields.io/badge/OpenCode-CLI%20v2-6e56cf?style=flat-square" alt="OpenCode CLI v2">
-
 # MegaAGT
 
-Desktop client (Tauri v2 + Rust) for the OpenCode CLI v2. Brings into one window the parallel sessions, subagents, model reasoning, tool diffs, permissions, and session export that the CLI buries in logs.
+**English** · [Português (Brasil)](README.md)
 
-## Problem / Why it exists
+![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black) ![Rust](https://img.shields.io/badge/Rust-2021-dea584?style=flat-square&logo=rust&logoColor=black) ![JavaScript](https://img.shields.io/badge/JavaScript-vanilla-f7df1e?style=flat-square&logo=javascript&logoColor=black) ![Windows](https://img.shields.io/badge/platform-Windows-0078d6?style=flat-square&logo=windows&logoColor=white)
 
-The OpenCode CLI v2 exposes its work through a local HTTP API and an SSE event stream, but has no graphical interface of its own. Keeping up with parallel sessions, subagents, cost and tokens per session, diffs, and permissions requires staying glued to the terminal and reading logs. MegaAGT consumes the OpenCode local API (HTTP Basic over service.json) and puts that work into a desktop app, to drive the CLI through a graphical interface instead of loose commands.
+## What it is
 
-## What it does
+A desktop client for the OpenCode CLI v2. The CLI exposes its work through a local HTTP API and an SSE stream but has no graphical interface of its own. MegaAGT consumes that API and brings into one window parallel sessions, subagents, model reasoning, tool diffs, permission prompts, cost and tokens per session, and session export.
 
-- Session list with search, multi-selection (Ctrl + click), batch deletion with confirmation listing the titles, pin/unpin for Parallel and a delete button per row
-- Collapsible sidebar (Ctrl + B); state persists
-- Subagent tree by parentID, with total per session
-- Context circle in the header: green, warning at 70%, error at 90%; shows used, remaining, and limit, with a shortcut to compact
-- Message queue: while the model is busy, the message waits; each item can be Cancel or Steer (send now, before the model's turn)
-- Delivery button in the composer: automatic (respects work in progress), now (cuts the model's turn), or queued
-- Attachments: drag files or folders into the window or use the composer clip; folders work (the server expands content). In Parallel, dropping onto a card attaches to it; outside cards, it goes to Focus
-- Camera: locks automatic scrolling; each session and each Parallel card keeps its own. Scrolling up releases the camera
-- Focus (chat): markdown, reasoning, and tools collapsed by default; long text truncated with "open to read"; agent and model switches via popover with search; token statistics (input/output/reasoning/cache), cost, directory, and session state; actions: interrupt, compact, fork, revert to a message, move to another directory, file diff, export, delete; permission prompts on the spot (Allow / Always / Deny); slash commands with autocomplete
-- Parallel: pinned sessions with live streaming and a message field per card; each card has model switch, context circle, and interrupt button; drag the header to reorder and the bottom-right corner to resize (size and order are saved)
-- Events: SSE stream log with stream status, reconnection counter, filter by type, and pause
-- Tools with their own presentation: edit/patch (unified diff with @@ header, 3 lines of context, green/red background, +n -n chips), write (numbered content with new file chip), read (real file line numbering), shell (command with ❯ and output block), grep (occurrence counter)
-- Effort / thinking: levels none (disables reasoning) to max; changing the level switches the model variant
-- Links open in the default browser; cited folders become clickable and open Explorer at the exact folder
-- Composer drafts in localStorage: not lost when switching model, session, configuration, or view; each Parallel card has its own
-- Settings in four sections: OpenCode Service (real status, toggle auto-start, connect, restart, stop), Appearance (9 themes, 6 accent colors, text size, round verbosity), Behavior (subagents in list, mark as seen, text cutoff, tool output limit, listed session count), Data (refresh, directory changes, clear preferences)
-- Environment tab: session context (items, type, tokens, cost, compaction summary), MCP servers (connected and failures), saved permissions (with a revoke button per rule), configuration (section names, never values)
-- In-session search with hit/total counter
-- Subagents panel above the composer (and compact version on Parallel cards) with agent, title, tokens, and time for each; click goes straight to the subagent conversation
-- Compaction summary as a collapsible block in the chat (reason, tokens, lines, markdown inside)
-- Warnings: provider retry (429 or endpoint down), unhandled events (with received JSON on click), reasoning-only mode (warning on screen)
-- Background service: the app starts OpenCode by itself when opening, with no console window
+## Status
+
+Working and in daily use on Windows. The app starts the OpenCode service by itself, connects with HTTP Basic over `service.json` and follows the SSE stream. There is no committed automated test suite; validation is manual, following the debugging notes in `CONTEXTO.md`.
+
+## Features
+
+**Sessions**
+
+- List with search, multi-select (Ctrl + click), batch delete with confirmation, pin/unpin for Parallel and per-row delete.
+- Collapsible sidebar (Ctrl + B), with persisted state.
+- Subagent tree by `parentID`, with a total per session.
+- Context ring in the header (green, warning at 70%, error at 90%) with a shortcut to compact.
+
+**Composer**
+
+- Message queue: while the model is busy, each item can be Cancelled or Steered (send now).
+- Delivery mode: automatic, now or queued.
+- Attachments by dragging files or folders (the server expands folders); in Parallel, dropping on a card attaches to it.
+- Drafts per session and per card in `localStorage`.
+- Camera that freezes auto-scroll, independent per session and per card.
+
+**Focus (chat)**
+
+- Markdown, reasoning and tools collapsed by default; long text truncated with "open to read".
+- Agent and model switching through a searchable popover.
+- Token statistics (input/output/reasoning/cache), cost, directory and session state.
+- Actions: interrupt, compact, fork, revert to a message, move to another directory, file diff, export and delete.
+- Inline permission prompts (Allow / Always / Deny) and slash commands with autocomplete.
+
+**Parallel**
+
+- Pinned sessions with live streaming and a message field per card.
+- Model switch, context ring and interrupt button on each card.
+- Reorder by the header and resize from the corner; size and order persist.
+
+**Tools and events**
+
+- Purpose-built rendering for `edit`/`patch` (unified diff, 3 context lines, +n/−n chips), `write`, `read`, `shell` and `grep`.
+- SSE log with stream status, reconnect counter, type filter and pause.
+- Effort/thinking from `none` to `max`, switching the model variant.
+- Warnings for provider retries (429 or endpoint down), unhandled events and reasoning-only mode.
+
+**Settings and environment**
+
+- Four sections: OpenCode service, Appearance (9 themes, 6 accent colours, text size), Behaviour and Data.
+- Environment tab: session context, MCP servers, saved permissions with revoke and configuration section names (never the values).
+- In-session search with a match counter, a running-subagents panel and a collapsible compaction summary.
+
+## Architecture
+
+The Rust backend is a bridge: it reads `~/.local/state/opencode/service.json`, authenticates with HTTP Basic (`opencode:<password>`) and sends the working directory in the `x-opencode-directory` header. One task consumes the `/api/event` SSE and republishes each event as `oc-event` to the frontend. The "running" state is reconciled through `GET /api/session/active`, the authoritative source.
+
+```mermaid
+flowchart LR
+    UI[dist/index.html + app.js] -- invoke --> RS[main.rs Tauri commands]
+    RS --> API[api.rs HTTP client]
+    API -- HTTP Basic + x-opencode-directory --> OC[OpenCode CLI v2]
+    OC -- SSE /api/event --> RS
+    RS -- oc-event --> UI
+    UI --> P[Parallel / Focus / Environment]
+```
 
 ## Stack
 
-- Frontend: vanilla JavaScript, no framework and no build step (dist/app.js, dist/styles.css, dist/index.html); @tauri-apps/api vendored in dist/tauri-api/
-- Backend: Rust with Tauri v2 (src-tauri/src/main.rs: Tauri commands, SSE event loop; src-tauri/src/api.rs: HTTP client); dependencies reqwest, tokio, serde, base64
-- Communication with OpenCode: HTTP Basic (opencode:<password>), x-opencode-directory header on every call, SSE on /api/event
-- Runtime: WebView2 (Windows 10/11)
-- Build: npx tauri build generates src-tauri\target\release\megaagt.exe (about 1 minute 30)
+- **Frontend**: vanilla JavaScript, no framework and no build step (`dist/app.js`, `dist/styles.css`, `dist/index.html`); `@tauri-apps/api` vendored in `dist/tauri-api/`.
+- **Backend**: Rust with Tauri v2 — `src-tauri/src/main.rs` (commands and SSE event loop) and `src-tauri/src/api.rs` (HTTP client). Dependencies: `reqwest`, `tokio`, `serde`, `serde_json`, `futures-util`, `anyhow`, `base64`.
+- **Runtime**: WebView2 on Windows 10/11.
+- **Communication**: HTTP Basic + SSE against the local OpenCode service.
 
-## How it works
+## Repository structure
 
-The Rust backend reads ~/.local/state/opencode/service.json (URL and password) and authenticates with HTTP Basic (opencode:<password>). The working directory is sent in the x-opencode-directory header on every call, so OpenCode resolves commands, skills, and project context. One task consumes the SSE /api/event and republishes each event as oc-event; the connection has no timeout and reconnects with short backoff because the server closes idle connections. The "running" state is reconciled via GET /api/session/active, the authoritative source. When the service record does not exist, the app starts the service itself (opencode service start, with CREATE_NO_WINDOW, no console window); in npm installations the real executable is looked up inside the CLI's node_modules, since there is no opencode.exe — only .cmd and .ps1 shims.
+```
+MegaAGT/
+├── dist/                     # vanilla JS frontend (app.js, styles.css, index.html)
+│   └── tauri-api/            # vendored @tauri-apps/api
+├── src-tauri/
+│   ├── src/main.rs           # Tauri commands, SSE event loop, Windows helpers
+│   ├── src/api.rs            # OpenCode HTTP client (service discovery and start)
+│   ├── Cargo.toml            # megaagt package
+│   ├── tauri.conf.json       # productName MegaAGT, identifier dev.opencode.hub
+│   └── capabilities/default.json
+├── app-icon.svg              # application icon
+├── CONTEXTO.md               # maintenance: architecture, API contract, pitfalls, debugging
+├── HERMES.md                 # unimplemented plan for a second tab with the Hermes Agent
+├── package.json
+└── package-lock.json
+```
+
+## Prerequisites and installation
+
+- Windows 10/11 with WebView2
+- Rust MSVC toolchain
+- Node.js 18+
+- OpenCode CLI v2 installed and on PATH
+
+```bash
+npm install
+```
 
 ## How to run
 
-Requirements: Windows 10/11 with WebView2, Rust MSVC toolchain, Node.js 18+, OpenCode CLI v2 installed and in PATH.
-
 Development:
 
-```
-npm install
+```bash
 npx tauri dev
 ```
 
 Build:
 
-```
+```bash
 npx tauri build
 ```
 
-Generates src-tauri\target\release\megaagt.exe (about 1 minute 30). Then copy it to the desktop — the .exe is locked while the app is running; close MegaAGT before copying:
+The executable is written to `src-tauri\target\release\megaagt.exe`. To copy it to the desktop, close the app first — the `.exe` is locked while running:
 
-```
-Copy-Item src-tauri\target\release\megaagt.exe "C:\Users\Kelvin\Desktop\MegaAGT.exe" -Force
-```
-
-The icon comes from app-icon.svg. After changing the icon:
-
-```
-npx tauri icon app-icon.svg
+```powershell
+Copy-Item src-tauri\target\release\megaagt.exe "$env:USERPROFILE\Desktop\MegaAGT.exe" -Force
 ```
 
-## Project structure
+After changing the icon: `npx tauri icon app-icon.svg`.
 
-```
-MegaAGT/
-├── dist/                  frontend vanilla JS (app.js, styles.css, index.html, tauri-api/)
-├── src-tauri/
-│   ├── src/main.rs        Tauri commands, SSE event loop, Windows helpers
-│   ├── src/api.rs         HTTP client with OpenCode (service discovery and startup)
-│   ├── Cargo.toml         megaagt package
-│   └── tauri.conf.json    productName MegaAGT, identifier dev.opencode.hub
-├── app-icon.svg           application icon
-├── CONTEXTO.md            maintenance document (architecture, API contract, pitfalls, test harness)
-├── HERMES.md              unimplemented plan for a second tab with the Hermes Agent
-├── package.json
-└── package-lock.json
-```
+## Tests and quality
 
-## Trade-offs and decisions
+There is no automated test suite in the repository. Verification is manual: `npx tauri dev` starts the app, connects to the service and exercises the screens. `CONTEXTO.md` records the points that have already cost time and the CDP debugging notes for WebView2, along with the API contract pitfalls.
 
-- Vanilla JS frontend, no framework: no build step; the whole app is three files that open in any text editor
-- Rust only as an HTTP bridge: all presentation is JS, testable without recompiling; the most complex Rust command is opening a folder
-- Client-side sorting: the API is incompatible with order together with cursor (InvalidCursorError)
-- Actions only in the ⋯ menu: a header with six buttons becomes a wall
-- Effort is the model variant: that is how OpenCode models reasoning; there is no separate endpoint
-- No new crate for opening external links: rundll32 handles it; shell-open would pull a dependency tree
-- Cutoff mask instead of gradient: an overlay always covers text; the mask sits in the padding, in the empty space
-- Clickable folders with an explicit scanner instead of generic linkify: pure regex fails both ways (cuts paths with spaces and swallows the adjacent sentence)
-- SSE without timeout: the server closes idle connections after about five seconds; fast reconnection is normal behavior, not a bug
+## Technical decisions and trade-offs
 
-## Known limitations
+- **Vanilla JS frontend, no framework**: no build step; the whole app is three files that open in any editor.
+- **Rust only as an HTTP bridge**: the entire presentation is JS and testable without recompiling; the most complex Rust command opens a folder.
+- **Sorting on the client**: the API rejects `order` together with `cursor` (`InvalidCursorError`).
+- **Actions only in the menu**: a header with six buttons becomes a wall.
+- **Effort is the model variant**: that is how OpenCode models reasoning; there is no separate endpoint.
+- **`rundll32` for external links**: avoids pulling the `shell-open` dependency tree.
+- **Clip mask instead of a gradient**: an overlay always covers text; the mask sits in the empty padding.
+- **Clickable folders with an explicit scanner**: pure regex errs both ways (cuts paths with spaces and swallows the neighbouring sentence).
+- **SSE without timeout**: the server closes idle connections after about five seconds; fast reconnects are normal behaviour.
 
-- Windows 10/11 with WebView2 only
-- Requires OpenCode CLI v2 installed and in PATH; the app calls opencode service start
-- npm installation: there is no opencode.exe, only .cmd and .ps1 shims; Windows does not resolve shims when spawning, so the app looks up the real executable inside the CLI's node_modules
-- If service.json exists but the process died (computer rebooted, for example), the read passes and the app only tries to reconnect; you must click to start or open the CLI once
-- The diff engine, above about 4 million cells (~2000 x 2000), falls back to "remove all / add all" instead of running out of memory; at most 400 lines of code displayed per block
-- GET /api/session?search= matches content, not title; do not delete sessions in a loop by search
-- Models that answer HTTP 402 (Insufficient account funds) are a transient error
+## Known limitations and roadmap
 
-## License
+- Windows 10/11 with WebView2 only.
+- Requires the OpenCode CLI v2 on PATH; the app calls `opencode service start`.
+- npm installs have no `opencode.exe`, only `.cmd`/`.ps1` shims; Windows does not resolve shims when spawning, so the app looks for the real executable inside the CLI's `node_modules`.
+- If `service.json` exists but the process died (after a reboot, for example), the read passes and the app only tries to reconnect; the user has to click start or open the CLI once.
+- Above ~4 million cells (~2000 × 2000), the diff engine falls back to "remove everything / add everything" instead of running out of memory; at most 400 code lines are rendered per block.
+- `GET /api/session?search=` matches content, not title.
+- Models that answer HTTP 402 (insufficient funds) produce a transient error.
+- Roadmap: a second tab with the Hermes Agent (plan in `HERMES.md`), not implemented yet.
 
-MIT — see the repository.
+## Development process
 
-## Author
+An individual project by Kelvin Oliveira, built with orchestrated AI agents and reviewed by the author. Interface decisions and integration pitfalls are recorded in `CONTEXTO.md`.
 
-Kelvin Oliveira — https://github.com/KelvinOliveiraCode · https://kelvinoliveiracode.github.io/portfolio/
+## License and author
+
+MIT (the `LICENSE` file is not included in this repository).
+
+**Author**: [Kelvin Oliveira](https://github.com/KelvinOliveiraCode) · [Portfolio](https://kelvinoliveiracode.github.io/portfolio/)
